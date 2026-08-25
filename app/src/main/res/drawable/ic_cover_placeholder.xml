@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Placeholder na brak okładki: nutowa ikona na ciemnym tle. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="96dp"
+    android:height="96dp"
+    android:viewportWidth="96"
+    android:viewportHeight="96">
+    <path
+        android:fillColor="#2A252E"
+        android:pathData="M0,0h96v96h-96z" />
+    <path
+        android:fillColor="#5C534A"
+        android:pathData="M62,18L38,24L38,56.5C33.5,55 28,56 26,60C24,65 28,69 33,69C36,69 38,67.8 38,67.8L38,72L62,66L62,18Z" />
+</vector>
