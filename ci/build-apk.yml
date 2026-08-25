@@ -1,0 +1,72 @@
+name: Build APK
+
+on:
+  push:
+    branches: [main, "arena/**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Gradle
+        run: |
+          curl -fsSL https://services.gradle.org/distributions/gradle-8.11.1-bin.zip -o /tmp/gradle.zip
+          mkdir -p /opt/gradle
+          unzip -q /tmp/gradle.zip -d /opt/gradle
+          echo "/opt/gradle/gradle-8.11.1/bin" >> "$GITHUB_PATH"
+          /opt/gradle/gradle-8.11.1/bin/gradle --version
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml', 'app/build.gradle.kts', 'build.gradle.kts') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      - name: Run unit tests
+        run: gradle --no-daemon testDebugUnitTest
+
+      - name: Build APKs (debug + release)
+        run: gradle --no-daemon :app:assembleDebug :app:assembleRelease
+
+      - name: Upload APK artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: vinyl-apk
+          path: |
+            app/build/outputs/apk/debug/app-debug.apk
+            app/build/outputs/apk/release/app-release-unsigned.apk
+          if-no-files-found: error
+
+      - name: Publish release (tylko z gałęzi main)
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: vinyl-v0.1.${{ github.run_number }}
+          name: "Vinyl v0.1 (run ${{ github.run_number }})"
+          files: |
+            app/build/outputs/apk/debug/app-debug.apk
+            app/build/outputs/apk/release/app-release-unsigned.apk
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
