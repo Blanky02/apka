@@ -18,8 +18,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.SkipNext
-import androidx.compose.material.icons.automirrored.filled.SkipPrevious
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -27,6 +25,8 @@ import androidx.compose.material.icons.filled.QueueMusic
 import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.RepeatOne
 import androidx.compose.material.icons.filled.Shuffle
+import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -69,7 +69,7 @@ fun NowPlayingScreen(
     val position by player.positionMs.collectAsStateWithLifecycle()
     val duration by player.durationMs.collectAsStateWithLifecycle()
     val repeatMode by player.repeatMode.collectAsStateWithLifecycle(Media3Player.REPEAT_MODE_OFF)
-    val shuffleMode by player.shuffleMode.collectAsStateWithLifecycle(Media3Player.SHUFFLE_MODE_OFF)
+    val shuffleMode by player.shuffleMode.collectAsStateWithLifecycle()
     val queue by player.queue.collectAsStateWithLifecycle()
     val currentIndex by player.currentIndex.collectAsStateWithLifecycle()
 
@@ -200,7 +200,7 @@ fun NowPlayingScreen(
                     Icon(
                         imageVector = Icons.Filled.Shuffle,
                         contentDescription = "Losowo",
-                        tint = if (shuffleMode != Media3Player.SHUFFLE_MODE_OFF) {
+                        tint = if (shuffleMode) {
                             MaterialTheme.colorScheme.primary
                         } else {
                             MaterialTheme.colorScheme.onSurfaceVariant
@@ -209,7 +209,7 @@ fun NowPlayingScreen(
                 }
                 IconButton(onClick = { player.skipToPrevious() }) {
                     Icon(
-                        imageVector = Icons.AutoMirrored.Filled.SkipPrevious,
+                        imageVector = Icons.Filled.SkipPrevious,
                         contentDescription = "Poprzedni",
                         modifier = Modifier.size(34.dp),
                     )
@@ -231,7 +231,7 @@ fun NowPlayingScreen(
                 }
                 IconButton(onClick = { player.skipToNext() }) {
                     Icon(
-                        imageVector = Icons.AutoMirrored.Filled.SkipNext,
+                        imageVector = Icons.Filled.SkipNext,
                         contentDescription = "Następny",
                         modifier = Modifier.size(34.dp),
                     )

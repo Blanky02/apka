@@ -35,15 +35,15 @@ data class Track(
             }
         }
 
-        /** Krótka etykieta jakości, np. "24/192" dla HI_RES_LOSSLESS. */
-        fun qualityBadge(quality: String?): String {
+        /** Krótka etykieta jakości, np. "24/192" dla HI_RES_LOSSLESS; null = brak etykiety. */
+        fun qualityBadge(quality: String?): String? {
             return when (quality?.uppercase()?.replace("-", "_")) {
                 "HI_RES_LOSSLESS" -> "24/192"
                 "HI_RES" -> "Hi-Res"
                 "LOSSLESS" -> "Lossless"
                 "HIGH" -> "320k"
                 "LOW" -> "128k"
-                else -> quality?.ifBlank { null }
+                else -> quality?.takeIf { it.isNotBlank() }
             }
         }
     }

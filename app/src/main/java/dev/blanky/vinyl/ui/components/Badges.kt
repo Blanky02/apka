@@ -1,6 +1,7 @@
 package dev.blanky.vinyl.ui.components
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -11,6 +12,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.blanky.vinyl.data.model.Track
@@ -37,7 +39,7 @@ fun SourceBadge(sourceId: String, modifier: Modifier = Modifier) {
                 text = label,
                 fontSize = 10.sp,
                 color = color,
-                fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                fontWeight = FontWeight.Bold,
             )
         }
     }
@@ -56,7 +58,7 @@ fun QualityBadge(quality: String?, modifier: Modifier = Modifier) {
             text = text,
             fontSize = 10.sp,
             color = MaterialTheme.colorScheme.onPrimaryContainer,
-            modifier = androidx.compose.foundation.layout.padding(horizontal = 5.dp, vertical = 2.dp),
+            modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
         )
     }
 }

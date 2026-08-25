@@ -15,6 +15,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.blanky.vinyl.ui.VinylRoot
@@ -29,6 +30,7 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             val themeMode by app.settings.themeMode.collectAsStateWithLifecycle(initialValue = "dark")
+            val context = LocalContext.current
 
             val requestNotifications = rememberLauncherForActivityResult(
                 ActivityResultContracts.RequestPermission(),
@@ -36,7 +38,7 @@ class MainActivity : ComponentActivity() {
 
             LaunchedEffect(Unit) {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-                    ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
+                    ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) !=
                     PackageManager.PERMISSION_GRANTED
                 ) {
                     requestNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
