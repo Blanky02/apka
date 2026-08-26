@@ -67,3 +67,27 @@ dependencies {
     debugImplementation(libs.compose.ui.tooling)
     testImplementation(libs.junit)
 }
+
+// Widoczność testów w CI: drukuj każdy test i twardo pilnuj, że testy realnie
+// się wykonały. Dzięki temu ZIELONY build sam w sobie dowodzi, że testy
+// przeszły i że było ich więcej niż zero (nie wymaga edycji workflowa).
+tasks.withType<org.gradle.api.tasks.testing.Test>().configureEach {
+    testLogging {
+        events("passed", "skipped", "failed")
+    }
+    doLast {
+        val dir = layout.buildDirectory.dir("test-results/$name").get().asFile
+        if (!dir.isDirectory) error("Brak wyników testów w $dir — task $name nie wykonał testów")
+        var total = 0
+        var bad = 0
+        dir.listFiles().orEmpty().filter { it.extension == "xml" }.forEach { f ->
+            val head = f.readText().take(4000)
+            total += Regex("""tests="(\d+)"""").find(head)?.groupValues?.get(1)?.toInt() ?: 0
+            bad += (Regex("""failures="(\d+)"""").find(head)?.groupValues?.get(1)?.toInt() ?: 0) +
+                (Regex("""errors="(\d+)"""").find(head)?.groupValues?.get(1)?.toInt() ?: 0)
+        }
+        println("TEST SUMMARY [$name]: total=$total failures+errors=$bad")
+        if (total == 0) error("Zero wykonanych testów w tasku $name")
+        if (bad > 0) error("$bad test(ów) z porażką w tasku $name")
+    }
+}
