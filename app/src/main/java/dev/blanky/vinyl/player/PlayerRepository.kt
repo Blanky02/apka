@@ -197,7 +197,7 @@ class PlayerRepository(
                 val items = playableTracks.map { buildMediaItem(it, urls.getValue(it.id)) }
                 withContext(Dispatchers.Main) {
                     mediaItems = items
-                    val c = controller()
+                    val c = awaitController()
                     c.setMediaItems(items, idx, 0)
                     _currentIndex.value = idx
                     _durationMs.value = playableTracks[idx].durationMs ?: 0L
@@ -336,7 +336,7 @@ class PlayerRepository(
      * Zwraca podłączony [MediaController], łącząc się z serwisem w razie potrzeby.
      * Media3 wymaga jednego wątku aplikacji, więc wszystko dzieje się na Main.
      */
-    private suspend fun controller(): MediaController = withContext(Dispatchers.Main) {
+    private suspend fun awaitController(): MediaController = withContext(Dispatchers.Main) {
         controller?.takeIf { it.isConnected }?.let { return@withContext it }
         (connecting ?: startConnecting().also { connecting = it }).await()
     }
@@ -381,10 +381,10 @@ class PlayerRepository(
     }
 
     /** Odpala operację na kontrolerze; błąd połączenia ląduje w [notice]. */
-    private fun withController(block: suspend (MediaController) -> Unit) {
+    private fun withController(block: suspend (MediaController) -> Unit): Unit {
         mainScope.launch {
             try {
-                block(controller())
+                block(awaitController())
             } catch (e: Exception) {
                 _notice.value = "Odtwarzacz niedostępny: ${e.message ?: e::class.simpleName}"
             }
@@ -429,7 +429,7 @@ class PlayerRepository(
             mediaItems = mediaItems.toMutableList().also {
                 it.add(index.coerceIn(0, it.size), item)
             }
-            val c = controller()
+            val c = awaitController()
             c.addMediaItem(index.coerceIn(0, c.mediaItemCount), item)
         }
         return true
@@ -502,7 +502,7 @@ class PlayerRepository(
                 if (result is StreamResult.Success) {
                     val newItem = buildMediaItem(track, result.url)
                     withContext(Dispatchers.Main) {
-                        val c = controller()
+                        val c = awaitController()
                         val index = c.currentMediaItemIndex
                         if (index !in 0 until c.mediaItemCount) return@withContext
                         if (index in mediaItems.indices) {
