@@ -33,4 +33,20 @@ class AudioQualityTest {
         assertEquals("HI_RES", AudioQuality.HI_RES.tier)
         assertEquals("HI_RES_LOSSLESS", AudioQuality.HI_RES_LOSSLESS.tier)
     }
+
+    @Test
+    fun `fallbackChain goes down from requested quality`() {
+        assertEquals(
+            listOf(AudioQuality.HI_RES, AudioQuality.LOSSLESS, AudioQuality.HIGH, AudioQuality.LOW),
+            AudioQuality.HI_RES.fallbackChain()
+        )
+        assertEquals(listOf(AudioQuality.LOW), AudioQuality.LOW.fallbackChain())
+        assertEquals(AudioQuality.HI_RES_LOSSLESS, AudioQuality.HI_RES_LOSSLESS.fallbackChain().first())
+    }
+
+    @Test
+    fun `lowerOf picks the lower quality`() {
+        assertEquals(AudioQuality.HIGH, AudioQuality.lowerOf(AudioQuality.HIGH, AudioQuality.LOSSLESS))
+        assertEquals(AudioQuality.HIGH, AudioQuality.lowerOf(AudioQuality.LOSSLESS, AudioQuality.HIGH))
+    }
 }

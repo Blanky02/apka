@@ -41,6 +41,139 @@ object TrackParser {
         return firstHttpUrlIn(root)
     }
 
+    // ---- wyłanianie adresu strumienia z odpowiedzi /track/ ----
+
+    /** Klucze, pod którymi API najczęściej chowa adres strumienia/manifestu. */
+    private val STREAM_KEYS: Set<String> = setOf(
+        "url", "streamurl", "stream", "streams",
+        "audiourl", "playurl", "trackurl",
+        "originaltrackurl", "directurl", "downloadurl", "download",
+        "file", "fileurl", "cdnurl", "link", "href", "path", "src",
+        "manifest", "manifesturl", "data", "result", "content",
+    )
+
+    /** Klucze, które praktycznie nigdy nie niosą strumienia (okładki, metadane). */
+    private val NON_STREAM_KEYS: Set<String> = setOf(
+        "cover", "coverurl", "coverart", "artwork", "artworkurl",
+        "image", "images", "thumbnail", "thumb", "picture", "album",
+        "artist", "artists", "title", "name", "id", "isrc", "duration",
+        "quality", "audioquality", "maxquality", "bitrate", "samplerate",
+    )
+
+    private val URL_IN_TEXT: Regex = Regex("""https?://[^\s"'<>)]+""")
+
+    /**
+     * Wyłania adres strumienia z odpowiedzi endpointu /track/. Rozumie m.in.:
+     * czysty tekst z URL-em, `{"url": ...}` i warianty kluczy, URL zaszyte
+     * w manifeście (`<BaseURL>https://...</BaseURL>`), payload w Base64 oraz
+     * odpowiedź z błędem (`{"error": "..."}`) -> null (klient próbuje niżej).
+     */
+    fun extractStreamUrl(raw: String): String? {
+        val body = raw.trim()
+        if (body.isEmpty()) return null
+
+        // 1) odpowiedź to po prostu adres
+        if (body.startsWith("http://") || body.startsWith("https://")) {
+            return URL_IN_TEXT.find(body)?.value
+        }
+
+        // 2) JSON: typowe klucze -> Base64/manifest -> dowolny URL
+        val element = runCatching { json.parseToJsonElement(body) }.getOrNull()
+        if (element != null) {
+            if (hasErrorShape(element)) return null
+            keyedUrl(element)?.let { return it }
+            decodedUrl(element)?.let { return it }
+            return firstHttpUrlIn(element)
+        }
+
+        // 3) nie-JSON (np. XML/MPD) — pierwszy adres z tekstu
+        return URL_IN_TEXT.find(body)?.value
+    }
+
+    /** `{"error": "..."}` / `{"success": false}` -> true (nie ma strumienia). */
+    private fun hasErrorShape(element: JsonElement): Boolean {
+        val obj = element as? JsonObject ?: return false
+        val errorText = obj["error"] ?: obj["errors"] ?: obj["message"] ?: obj["detail"] ?: obj["reason"]
+        if (errorText is JsonPrimitive && errorText !is JsonNull) {
+            val asText = errorText.contentOrNull
+            if (!asText.isNullOrBlank() && asText != "null" && asText != "false" && asText != "0") return true
+        }
+        val success = obj["success"] ?: obj["ok"] ?: obj["status"]
+        if (success is JsonPrimitive) {
+            val text = success.contentOrNull.orEmpty()
+            if (text == "false" || text == "0" || text.equals("error", ignoreCase = true)) return true
+        }
+        return false
+    }
+
+    /** Szuka URL-a pod typowymi kluczami (rekurencyjnie, z pominięciem okładek). */
+    private fun keyedUrl(element: JsonElement): String? {
+        when (element) {
+            is JsonObject -> {
+                for ((key, value) in element.entries) {
+                    if (key.lowercase() in STREAM_KEYS) {
+                        urlFromPrimitive(value)?.let { return it }
+                    }
+                }
+                for ((key, value) in element.entries) {
+                    if (key.lowercase() in NON_STREAM_KEYS) continue
+                    if (value is JsonObject || value is JsonArray) {
+                        keyedUrl(value)?.let { return it }
+                    }
+                }
+            }
+            is JsonArray -> {
+                for (child in element) keyedUrl(child)?.let { return it }
+            }
+            is JsonPrimitive -> urlFromPrimitive(element)?.let { return it }
+            is JsonNull -> Unit
+        }
+        return null
+    }
+
+    /** Próbuje zdekodować Base64 (manifest MPD/HLS) i znaleźć w środku adres. */
+    private fun decodedUrl(element: JsonElement): String? {
+        val candidates = mutableListOf<String>()
+        collectStrings(element, candidates, limit = 40)
+        for (candidate in candidates) {
+            if (candidate.startsWith("http://") || candidate.startsWith("https://")) continue
+            if (candidate.length < 16) continue
+            val decoded = decodeBase64(candidate.trim()) ?: continue
+            URL_IN_TEXT.find(decoded)?.let { return it.value }
+        }
+        return null
+    }
+
+    private fun decodeBase64(value: String): String? {
+        val standard = runCatching {
+            String(java.util.Base64.getDecoder().decode(value), Charsets.UTF_8)
+        }.getOrNull()
+        if (standard != null) return standard
+        return runCatching {
+            String(java.util.Base64.getUrlDecoder().decode(value), Charsets.UTF_8)
+        }.getOrNull()
+    }
+
+    private fun urlFromPrimitive(value: JsonElement): String? {
+        val primitive = value as? JsonPrimitive ?: return null
+        if (!primitive.isString) return null
+        val text = primitive.contentOrNull ?: return null
+        return when {
+            text.startsWith("http://") || text.startsWith("https://") -> text
+            else -> URL_IN_TEXT.find(text)?.value
+        }
+    }
+
+    private fun collectStrings(element: JsonElement, out: MutableList<String>, limit: Int) {
+        if (out.size >= limit) return
+        when (element) {
+            is JsonPrimitive -> if (element.isString) element.contentOrNull?.let(out::add)
+            is JsonArray -> element.forEach { collectStrings(it, out, limit) }
+            is JsonObject -> element.values.forEach { collectStrings(it, out, limit) }
+            is JsonNull -> Unit
+        }
+    }
+
     private fun firstHttpUrlIn(element: JsonElement): String? {
         when (element) {
             is JsonPrimitive -> {
