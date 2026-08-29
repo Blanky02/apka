@@ -105,6 +105,9 @@ class PlayerRepository(
     private val _notice = MutableStateFlow<String?>(null)
     val notice: StateFlow<String?> = _notice.asStateFlow()
 
+    /** Ostatni błąd wyłaniania strumienia — pokazujemy go w komunikacie zamiast zgadywać. */
+    private val lastResolveError = AtomicReference<String?>(null)
+
     data class PreparingInfo(val done: Int, val total: Int)
 
     // ---- wewnętrzne dane odtwarzania ----
@@ -178,6 +181,7 @@ class PlayerRepository(
         val gen = generation
         _queue.value = tracks
         _notice.value = null
+        lastResolveError.set(null)
         _preparing.value = PreparingInfo(0, tracks.size)
         ioScope.launch {
             try {
@@ -185,7 +189,12 @@ class PlayerRepository(
                 if (gen != generation) return@launch // nowsza kolejka już idzie
                 val playableTracks = tracks.filter { urls.containsKey(it.id) }
                 if (playableTracks.isEmpty()) {
-                    _notice.value = "Żaden utwór nie jest dostępny w wybranej jakości. Zmień jakość w Ustawieniach."
+                    val detail = lastResolveError.getAndSet(null)
+                    _notice.value = if (detail.isNullOrBlank()) {
+                        "Nie udało się pobrać strumienia żadnego utworu. Zmień jakość w Ustawieniach i zajrzyj do Diagnostyki API."
+                    } else {
+                        "Nie udało się pobrać strumienia: $detail"
+                    }
                     return@launch
                 }
                 val missing = tracks.size - playableTracks.size
@@ -446,7 +455,20 @@ class PlayerRepository(
                     semaphore.withPermit {
                         try {
                             val result = sources.resolveStream(track, quality)
-                            if (result is StreamResult.Success) out[track.id] = result.url
+                            if (result is StreamResult.Success) {
+                                out[track.id] = result.url
+                            } else {
+                                val message = (result as StreamResult.Error).message
+                                lastResolveError.compareAndSet(null, message)
+                                ApiLog.record(
+                                    sources.sourceFor(track).displayName,
+                                    "resolve",
+                                    track.id,
+                                    -1,
+                                    message,
+                                    ok = false,
+                                )
+                            }
                         } catch (e: Exception) {
                             ApiLog.record(
                                 sources.sourceFor(track).displayName,

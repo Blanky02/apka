@@ -91,4 +91,52 @@ class TrackParserTest {
             TrackParser.firstHttpUrl("""{"items":[{"cover":"https://x.io/a.jpg"}]}""") == "https://x.io/a.jpg"
         )
     }
+
+    @Test
+    fun `extractStreamUrl plain url body`() {
+        assertEquals(
+            "https://cdn.example.com/a.flac?token=1",
+            TrackParser.extractStreamUrl("https://cdn.example.com/a.flac?token=1\n")
+        )
+    }
+
+    @Test
+    fun `extractStreamUrl from typical keys`() {
+        assertEquals(
+            "https://cdn.example.com/x.flac",
+            TrackParser.extractStreamUrl("""{"url":"https://cdn.example.com/x.flac"}""")
+        )
+        assertEquals(
+            "https://cdn.example.com/y.flac",
+            TrackParser.extractStreamUrl("""{"data":{"originalTrackUrl":"https://cdn.example.com/y.flac"}}""")
+        )
+    }
+
+    @Test
+    fun `extractStreamUrl prefers stream key over cover`() {
+        val json = """{"cover":"https://img.example.com/a.jpg","streamUrl":"https://cdn.example.com/z.flac"}"""
+        assertEquals("https://cdn.example.com/z.flac", TrackParser.extractStreamUrl(json))
+    }
+
+    @Test
+    fun `extractStreamUrl decodes base64 manifest`() {
+        val mpd = "<MPD><BaseURL>https://cdn.example.com/dash/1.mpd</BaseURL></MPD>"
+        val b64 = java.util.Base64.getEncoder().encodeToString(mpd.toByteArray())
+        val json = """{"manifest":"$b64","mimeType":"application/dash+xml"}"""
+        assertEquals("https://cdn.example.com/dash/1.mpd", TrackParser.extractStreamUrl(json))
+    }
+
+    @Test
+    fun `extractStreamUrl finds url in xml manifest`() {
+        val mpd = """<?xml version="1.0"?><MPD><BaseURL>https://cdn.example.com/m/1.m4s</BaseURL></MPD>"""
+        assertEquals("https://cdn.example.com/m/1.m4s", TrackParser.extractStreamUrl(mpd))
+    }
+
+    @Test
+    fun `extractStreamUrl returns null for error payloads`() {
+        assertNull(TrackParser.extractStreamUrl("""{"error":"track not available in this quality"}"""))
+        assertNull(TrackParser.extractStreamUrl("""{"success":false,"message":"nope"}"""))
+        assertNull(TrackParser.extractStreamUrl(""))
+        assertNull(TrackParser.extractStreamUrl("{}"))
+    }
 }

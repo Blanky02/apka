@@ -66,7 +66,7 @@ class OctaveSource(
             try {
                 val resp = get(url)
                 if (resp.code in 200..299) {
-                    val fromJson = TrackParser.firstHttpUrl(resp.body)
+                    val fromJson = TrackParser.extractStreamUrl(resp.body)
                     val fromBody = resp.body.trim().takeIf { it.startsWith("http") }
                     val finalUrl = fromJson ?: fromBody ?: (if (resp.finalUrl != url) resp.finalUrl else null)
                     if (finalUrl != null) {

@@ -68,35 +68,50 @@ class MonochromeSource(
         emptyList()
     }
 
+    /**
+     * Wyłania adres strumienia. Próbuje od żądanej jakości w dół
+     * (np. HI_RES_LOSSLESS -> HI_RES -> LOSSLESS -> HIGH -> LOW), bo API nie
+     * zawsze samo obniża jakość — bez tego wybranie utworu kończyło się
+     * komunikatem „żaden utwór nie jest dostępny w wybranej jakości”.
+     *
+     * Jeśli wyszukiwarka podała maksymalną jakość utworu (maxQuality), nie
+     * pytamy o wyższą, tylko schodzimy od razu do tej, którą utwór ma.
+     */
     override suspend fun resolveStreamUrl(track: Track, quality: AudioQuality): StreamResult =
         withContext(Dispatchers.IO) {
             val tid = track.id.removePrefix("$ID_PREFIX-")
             val n = instances.size
+            val startTier = track.maxQuality
+                ?.let { AudioQuality.fromName(it) }
+                ?.let { AudioQuality.lowerOf(quality, it) }
+                ?: quality
             var lastError = "nieznany błąd"
-            for (i in 0 until n) {
-                val base = instances[(instanceIndex + i) % n]
-                val url = "$base/track/?id=$tid&quality=${quality.tier}"
-                try {
-                    val resp = get(url)
-                    if (resp.code in 200..299) {
-                        // odpowiedź może być: JSON z adresem, sam adres w ciele, albo redirect na CDN
-                        val fromJson = TrackParser.firstHttpUrl(resp.body)
-                        val fromBody = resp.body.trim().takeIf { it.startsWith("http") }
-                        val finalUrl = fromJson ?: fromBody ?: (if (resp.finalUrl != url) resp.finalUrl else null)
-                        if (finalUrl != null) {
-                            instanceIndex = i
-                            ApiLog.record(displayName, "stream", url, resp.code, finalUrl.take(140), ok = true)
-                            return@withContext StreamResult.Success(finalUrl)
+
+            for (tier in startTier.fallbackChain()) {
+                for (i in 0 until n) {
+                    val base = instances[(instanceIndex + i) % n]
+                    val url = "$base/track/?id=$tid&quality=${tier.tier}"
+                    try {
+                        val resp = get(url)
+                        if (resp.code in 200..299) {
+                            // odpowiedź może być: JSON z adresem, sam adres w ciele, albo redirect na CDN
+                            val stream = TrackParser.extractStreamUrl(resp.body)
+                                ?: (if (resp.finalUrl != url) resp.finalUrl else null)
+                            if (stream != null) {
+                                instanceIndex = i
+                                ApiLog.record(displayName, "stream/${tier.tier}", url, resp.code, stream.take(140), ok = true)
+                                return@withContext StreamResult.Success(stream, tier.tier)
+                            }
+                            lastError = "brak adresu strumienia (${resp.body.take(120)})"
+                            ApiLog.record(displayName, "stream/${tier.tier}", url, resp.code, lastError, ok = false)
+                        } else {
+                            lastError = "HTTP ${resp.code}: ${resp.body.take(120)}"
+                            ApiLog.record(displayName, "stream/${tier.tier}", url, resp.code, resp.body.take(160), ok = false)
                         }
-                        lastError = "brak adresu strumienia w odpowiedzi"
-                        ApiLog.record(displayName, "stream", url, resp.code, resp.body.take(200), ok = false)
-                    } else {
-                        lastError = "HTTP ${resp.code}"
-                        ApiLog.record(displayName, "stream", url, resp.code, resp.body.take(200), ok = false)
+                    } catch (e: Exception) {
+                        lastError = e.message ?: "błąd sieci"
+                        ApiLog.record(displayName, "stream/${tier.tier}", url, -1, lastError, ok = false)
                     }
-                } catch (e: Exception) {
-                    lastError = e.message ?: "błąd sieci"
-                    ApiLog.record(displayName, "stream", url, -1, lastError, ok = false)
                 }
             }
             StreamResult.Error("Monochrome: $lastError")
