@@ -400,7 +400,7 @@ class OctaveSource(
         )
 
         /** Typowe warianty endpointu logowania kluczem konta. */
-        val DEFAULT_LOGIN_CANDIDATES: List<LoginCandidate> = listOf(
+        private val DEFAULT_LOGIN_CANDIDATES: List<LoginCandidate> = listOf(
             LoginCandidate("POST", "/api/account/login", "key", null),
             LoginCandidate("POST", "/api/account/login", "accountKey", null),
             LoginCandidate("POST", "/api/account/auth", "key", null),

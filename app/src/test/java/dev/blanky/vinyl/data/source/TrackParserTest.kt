@@ -190,15 +190,17 @@ class TrackParserTest {
     fun `parsePlaybackToken reads token and gated`() {
         val ok = TrackParser.parsePlaybackToken("""{"token":"abc123","expiresIn":3600,"gated":false}""")
         assertNotNull(ok)
-        assertEquals("abc123", ok!!.token)
-        assertEquals(3600L, ok.expiresInSec)
-        assertEquals(false, ok.gated)
+        val t = ok!!
+        assertEquals("abc123", t.token)
+        assertEquals(3600L, t.expiresInSec)
+        assertEquals(false, t.gated)
 
         val gated = TrackParser.parsePlaybackToken("""{"token":null,"expiresIn":0,"gated":true,"reason":"no-account"}""")
         assertNotNull(gated)
-        assertNull(gated!!.token)
-        assertEquals(true, gated.gated)
-        assertEquals("no-account", gated.reason)
+        val g = gated!!
+        assertNull(g.token)
+        assertEquals(true, g.gated)
+        assertEquals("no-account", g.reason)
     }
 
     @Test
