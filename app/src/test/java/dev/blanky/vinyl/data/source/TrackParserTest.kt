@@ -139,4 +139,49 @@ class TrackParserTest {
         assertNull(TrackParser.extractStreamUrl(""))
         assertNull(TrackParser.extractStreamUrl("{}"))
     }
+
+    @Test
+    fun `parses octave api search shape with album cover`() {
+        val json = """
+            {"tracks":[
+              {"id":"3995047821","title":"Sexy Nana",
+               "artist":{"id":"8909272","name":"Aya Nakamura"},
+               "album":{"id":"973081821","title":"Sexy Nana",
+                        "cover_big":"https://cdn-images.dzcdn.net/images/cover/x/250x250.jpg"},
+               "duration":156,"explicit":false,"rank":995879}
+            ]}
+        """.trimIndent()
+        val tracks = TrackParser.parseTracks(json, "octave", "oct")
+        assertNotNull(tracks)
+        assertEquals(1, tracks!!.size)
+        val t = tracks[0]
+        assertEquals("oct-3995047821", t.id)
+        assertEquals("Sexy Nana", t.title)
+        assertEquals(listOf("Aya Nakamura"), t.artists)
+        assertEquals("Sexy Nana", t.album)
+        assertEquals(156_000L, t.durationMs)
+        assertEquals("https://cdn-images.dzcdn.net/images/cover/x/250x250.jpg", t.coverUrl)
+    }
+
+    @Test
+    fun `extractManifestUri finds uri in trackManifests response`() {
+        val json = """
+            {"version":"2.10","data":{"data":{"id":4167846,"duration":271,
+              "attributes":{"uri":"https://cdn.example.com/manifests/1.mpd","formats":["FLAC"]}}}}
+        """.trimIndent()
+        assertEquals("https://cdn.example.com/manifests/1.mpd", TrackParser.extractManifestUri(json))
+    }
+
+    @Test
+    fun `extractManifestUri handles data attributes wrapper`() {
+        val json = """{"data":{"attributes":{"uri":"https://cdn.example.com/1.m3u8"}}}"""
+        assertEquals("https://cdn.example.com/1.m3u8", TrackParser.extractManifestUri(json))
+    }
+
+    @Test
+    fun `extractManifestUri null when no attributes uri`() {
+        assertNull(TrackParser.extractManifestUri("""{"detail":"Not Found"}"""))
+        assertNull(TrackParser.extractManifestUri("""{"data":{"id":1}}"""))
+        assertNull(TrackParser.extractManifestUri("not json"))
+    }
 }

@@ -12,6 +12,10 @@ import dev.blanky.vinyl.data.settings.VinylSettings
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.first
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 
@@ -23,6 +27,12 @@ import okhttp3.Request
  * KONFIGUROWALNE w ustawieniach (szablony z placeholderami {query} i {id}),
  * a przycisk "Wykryj API" testuje zestaw typowych wariantów i zapisuje
  * pierwszy, który zwróci poprawną listę utworów.
+ *
+ * Sprawdzone endpointy (stan: sierpień 2026):
+ *   GET /api/search?q={query}          -> {"tracks":[...]}
+ *   GET /api/track/{id}[/stream]       -> {"url": ..., "preview": ..., "gated": bool}
+ * Pełne strumieniowanie jest "gated" (wymaga konta/tokenu) — dla anonimowych
+ * klientów API zwraca tylko 30-sekundowy `preview`.
  */
 class OctaveSource(
     private val http: OkHttpClient,
@@ -33,6 +43,8 @@ class OctaveSource(
     override val displayName: String = "Octave"
 
     private val userAgent = "Vinyl/0.1 (Android)"
+
+    private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
     override suspend fun searchTracks(query: String, limit: Int): List<Track> = withContext(Dispatchers.IO) {
         val base = settings.octaveBase.first().trimEnd('/')
@@ -66,11 +78,16 @@ class OctaveSource(
             try {
                 val resp = get(url)
                 if (resp.code in 200..299) {
-                    val fromJson = TrackParser.extractStreamUrl(resp.body)
+                    val fromJson = parseStreamResponse(resp.body)
                     val fromBody = resp.body.trim().takeIf { it.startsWith("http") }
                     val finalUrl = fromJson ?: fromBody ?: (if (resp.finalUrl != url) resp.finalUrl else null)
                     if (finalUrl != null) {
-                        ApiLog.record(displayName, "stream", url, resp.code, finalUrl.take(140), ok = true)
+                        val summary = if (finalUrl.contains("cdnt-preview")) {
+                            finalUrl.take(140) + " (preview 30 s — pełny strumień wymaga konta)"
+                        } else {
+                            finalUrl.take(140)
+                        }
+                        ApiLog.record(displayName, "stream", url, resp.code, summary, ok = true)
                         return@withContext StreamResult.Success(finalUrl)
                     }
                     ApiLog.record(displayName, "stream", url, resp.code, "brak URL: ${resp.body.take(200)}", ok = false)
@@ -82,6 +99,28 @@ class OctaveSource(
             }
             StreamResult.Error("Octave: nie udało się pobrać strumienia — sprawdź szablony endpointów w Ustawieniach")
         }
+
+    /**
+     * Parsuje odpowiedź `/api/track/{id}` lub `/api/track/{id}/stream`:
+     * `{"url": "...", "preview": "...", "id": "...", "quality": "...", "gated": bool}`.
+     *
+     * Gdy `gated` jest ustawione (pełny strumień wymaga konta/tokenu), zwraca
+     * `preview` (30 s), żeby zamiast twardego błędu grało przynajmniej zajawkę.
+     * Gdy nie ma `gated` ani `preview`, zwraca `url` (stary/otwarty format).
+     */
+    private fun parseStreamResponse(raw: String): String? {
+        val root = runCatching { json.parseToJsonElement(raw) }.getOrNull() ?: return null
+        val obj = root as? JsonObject ?: return null
+        fun str(key: String): String? = (obj[key] as? JsonPrimitive)?.contentOrNull
+        val url = str("url")
+        val gated = str("gated") == "true"
+        val preview = str("preview")
+        return when {
+            url != null && !gated -> url
+            preview != null -> preview
+            else -> url
+        }
+    }
 
     override suspend fun testConnection(): SourceStatus = withContext(Dispatchers.IO) {
         if (!settings.octaveEnabled.first()) {
@@ -153,9 +192,10 @@ class OctaveSource(
 
         /** Typowe warianty endpointu wyszukiwarki (Octave nie ma publicznych docs). */
         val SEARCH_CANDIDATES: List<String> = listOf(
+            "/api/search?q={query}",
+            "/api/search?query={query}",
             "/search?q={query}",
             "/v1/search?q={query}",
-            "/api/search?q={query}",
             "/search/tracks?q={query}",
             "/tracks?q={query}",
             "/tracks/search?q={query}",

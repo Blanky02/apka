@@ -89,19 +89,32 @@ Uwagi projektowe:
 ### Monochrome (główne)
 Katalog Tidal, FLAC do 24/192. Endpointy (dane społeczności):
 - `GET /search/?s={q}&limit={n}` — wyniki wyszukiwania
-- `GET /track/?id={tid}&quality={LOW|HIGH|LOSSLESS|HI_RES|HI_RES_LOSSLESS}` — URL strumienia
+- `GET /trackManifests/?id={tid}&quality={LOW|HIGH|LOSSLESS|HI_RES_LOSSLESS}&adaptive=false&formats={FLAC|FLAC_HIRES|AACLC|HEAACV1}` — manifest DASH/HLS (nowszy format, grany wprost przez ExoPlayer)
+- `GET /track/?id={tid}&quality={LOW|HIGH|LOSSLESS|HI_RES|HI_RES_LOSSLESS}` — bezpośredni URL strumienia (starszy format, fallback)
 - `GET /cover/?id={tid}` — okładka
 
 Serwis działa z wielu instancji — kolejność i adresy:
-`MonochromeSource.DEFAULT_INSTANCES` (app sam obsługuje failover).
+`MonochromeSource.DEFAULT_INSTANCES` (app sam obsługuje failover; lista jest
+zsynchronizowana z `public/instances.json` oficjalnego repo). Instancje
+`*.monochrome.tf` potrafią być czasowo wyłączone (404/503/suspended) —
+wtedy app przechodzi do kolejnych.
 
 ### Octave (beta)
 `https://api.octavestreaming.com` — **nie ma publicznej dokumentacji API**.
+Sprawdzone endpointy (stan: sierpień 2026):
+- `GET /api/search?q={query}` — wyniki wyszukiwania (`{"tracks":[...]}`)
+- `GET /api/track/{id}` lub `/api/track/{id}/stream` — `{"url": ..., "preview": ..., "gated": ...}`
+
 W ustawieniach:
 - „Adres API” — base URL (domyślnie `https://api.octavestreaming.com`)
-- „Szablon wyszukiwarki” — ścieżka z `{query}`, np. `/search?q={query}`
-- „Szablon strumienia” — ścieżka z `{id}` i `{quality}`
-- **„Wykryj API”** — testuje 10 typowych wariantów i zapisuje działający
+- „Szablon wyszukiwarki” — ścieżka z `{query}`, domyślnie `/api/search?q={query}`
+- „Szablon strumienia” — ścieżka z `{id}`, domyślnie `/api/track/{id}/stream`
+- **„Wykryj API”** — testuje typowe warianty i zapisuje działający
+
+> ⚠️ Octave „gates” pełne strumieniowanie: endpoint `/audio/{quality}?track={id}`
+> wymaga tokenu, a `GET /api/playback-token` dla anonimowych klientów zwraca
+> `{"gated":true,"reason":"no-account"}`. Dlatego gdy utwór jest `gated`,
+> aplikacja odtwarza dostępny 30-sekundowy `preview` zamiast pełnego strumienia.
 
 Jak poznasz dokładne adresy endpointów (np. z [Discorda Octave](https://discord.gg/5cZAbW3Tbg)),
 wklej je w ustawieniach — reszta (parser, odtwarzanie, kolejka) już działa.

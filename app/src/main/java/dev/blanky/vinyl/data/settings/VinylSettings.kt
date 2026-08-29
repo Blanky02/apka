@@ -60,7 +60,7 @@ class VinylSettings(private val context: Context) {
 
     companion object {
         const val DEFAULT_OCTAVE_BASE = "https://api.octavestreaming.com"
-        const val DEFAULT_OCTAVE_SEARCH = "/search?q={query}"
-        const val DEFAULT_OCTAVE_STREAM = "/track/{id}/stream"
+        const val DEFAULT_OCTAVE_SEARCH = "/api/search?q={query}"
+        const val DEFAULT_OCTAVE_STREAM = "/api/track/{id}/stream"
     }
 }

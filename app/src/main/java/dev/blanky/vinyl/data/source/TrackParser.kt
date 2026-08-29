@@ -41,6 +41,32 @@ object TrackParser {
         return firstHttpUrlIn(root)
     }
 
+    /**
+     * Wyciąga adres manifestu z odpowiedzi `/trackManifests/` (nowszy format Monochrome).
+     * Adres siedzi w `attributes.uri`, zwykle jako `data.data.attributes.uri` albo
+     * `data.attributes.uri`. Manifest to DASH (`.mpd`) albo HLS (`.m3u8`) — ExoPlayer
+     * odtworzy go bezpośrednio.
+     */
+    fun extractManifestUri(raw: String): String? {
+        val root = runCatching { json.parseToJsonElement(raw) }.getOrNull() ?: return null
+        return findManifestUri(root)
+    }
+
+    private fun findManifestUri(element: JsonElement): String? {
+        when (element) {
+            is JsonObject -> {
+                (element["attributes"] as? JsonObject)?.let { attrs ->
+                    val uri = (attrs["uri"] as? JsonPrimitive)?.contentOrNull
+                    if (uri != null && (uri.startsWith("http://") || uri.startsWith("https://"))) return uri
+                }
+                for (value in element.values) findManifestUri(value)?.let { return it }
+            }
+            is JsonArray -> for (child in element) findManifestUri(child)?.let { return it }
+            is JsonPrimitive, is JsonNull -> Unit
+        }
+        return null
+    }
+
     // ---- wyłanianie adresu strumienia z odpowiedzi /track/ ----
 
     /** Klucze, pod którymi API najczęściej chowa adres strumienia/manifestu. */
@@ -238,9 +264,10 @@ object TrackParser {
         val id = obj.stringId() ?: return null
         val title = obj.text("title") ?: obj.text("name") ?: return null
         val artists = parseArtists(obj)
+        val albumObj = obj["album"] as? JsonObject
         val album = obj.text("album")
-            ?: (obj["album"] as? JsonObject)?.text("name")
-            ?: (obj["album"] as? JsonObject)?.text("title")
+            ?: albumObj?.text("name")
+            ?: albumObj?.text("title")
         val durationSec = obj.number("duration")
             ?: obj.number("durationSec")
             ?: obj.number("durationInSec")
@@ -253,6 +280,11 @@ object TrackParser {
             ?: obj.text("artwork")
             ?: ((obj["cover"] as? JsonPrimitive)?.stringHttpUrl())
             ?: ((obj["artwork"] as? JsonObject)?.text("url"))
+            // Octave/Deezer chowa okładkę w album.cover_* (gotowe URL-e)
+            ?: albumObj?.text("cover_xl")
+            ?: albumObj?.text("cover_big")
+            ?: albumObj?.text("cover_medium")
+            ?: albumObj?.text("cover_small")
         val quality = obj.text("audioQuality")
             ?: obj.text("quality")
             ?: obj.text("maxQuality")

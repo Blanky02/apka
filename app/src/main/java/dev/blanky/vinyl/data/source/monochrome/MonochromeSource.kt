@@ -21,7 +21,8 @@ import okhttp3.Request
  *
  * Endpointy (zgodnie z dokumentacją społeczności Monochrome):
  *   GET /search/?s={query}&limit={n}
- *   GET /track/?id={tid}&quality={LOW|HIGH|LOSSLESS|HI_RES|HI_RES_LOSSLESS}
+ *   GET /trackManifests/?id={tid}&quality={...}&adaptive=false&formats={...}  (nowszy: manifest DASH/HLS)
+ *   GET /track/?id={tid}&quality={LOW|HIGH|LOSSLESS|HI_RES|HI_RES_LOSSLESS}   (starszy: bezpośredni adres)
  *   GET /cover/?id={tid}
  *   GET /info/?id={tid}
  *   GET /lyrics/?id={tid}
@@ -49,7 +50,7 @@ class MonochromeSource(
                 if (resp.code in 200..299) {
                     val parsed = TrackParser.parseTracks(resp.body, id, ID_PREFIX)
                     if (parsed != null) {
-                        instanceIndex = i
+                        instanceIndex = (instanceIndex + i) % n
                         ApiLog.record(displayName, "search", url, resp.code, "${parsed.size} utworów", ok = true)
                         return@withContext parsed
                     }
@@ -76,6 +77,10 @@ class MonochromeSource(
      *
      * Jeśli wyszukiwarka podała maksymalną jakość utworu (maxQuality), nie
      * pytamy o wyższą, tylko schodzimy od razu do tej, którą utwór ma.
+     *
+     * Monochrome migruje strumieniowanie ze starego `/track/` na nowsze
+     * `/trackManifests/` (manifest DASH/HLS), więc najpierw próbujemy nowego
+     * endpointu, a stary zostaje jako fallback dla starszych instancji.
      */
     override suspend fun resolveStreamUrl(track: Track, quality: AudioQuality): StreamResult =
         withContext(Dispatchers.IO) {
@@ -90,32 +95,68 @@ class MonochromeSource(
             for (tier in startTier.fallbackChain()) {
                 for (i in 0 until n) {
                     val base = instances[(instanceIndex + i) % n]
-                    val url = "$base/track/?id=$tid&quality=${tier.tier}"
+
+                    // 1) nowszy format: /trackManifests/ zwraca manifest DASH/HLS
+                    val (manifestQuality, manifestFormat) = manifestFormatFor(tier)
+                    val manifestUrl = "$base/trackManifests/?id=$tid&quality=$manifestQuality&adaptive=false&formats=$manifestFormat"
                     try {
-                        val resp = get(url)
+                        val resp = get(manifestUrl)
                         if (resp.code in 200..299) {
-                            // odpowiedź może być: JSON z adresem, sam adres w ciele, albo redirect na CDN
-                            val stream = TrackParser.extractStreamUrl(resp.body)
-                                ?: (if (resp.finalUrl != url) resp.finalUrl else null)
+                            val stream = TrackParser.extractManifestUri(resp.body)
                             if (stream != null) {
-                                instanceIndex = i
-                                ApiLog.record(displayName, "stream/${tier.tier}", url, resp.code, stream.take(140), ok = true)
+                                instanceIndex = (instanceIndex + i) % n
+                                ApiLog.record(displayName, "stream/${tier.tier}", manifestUrl, resp.code, stream.take(140), ok = true)
                                 return@withContext StreamResult.Success(stream, tier.tier)
                             }
-                            lastError = "brak adresu strumienia (${resp.body.take(120)})"
-                            ApiLog.record(displayName, "stream/${tier.tier}", url, resp.code, lastError, ok = false)
+                            lastError = "brak manifestu (${resp.body.take(120)})"
+                            ApiLog.record(displayName, "stream/${tier.tier}", manifestUrl, resp.code, lastError, ok = false)
                         } else {
                             lastError = "HTTP ${resp.code}: ${resp.body.take(120)}"
-                            ApiLog.record(displayName, "stream/${tier.tier}", url, resp.code, resp.body.take(160), ok = false)
+                            ApiLog.record(displayName, "stream/${tier.tier}", manifestUrl, resp.code, resp.body.take(160), ok = false)
                         }
                     } catch (e: Exception) {
                         lastError = e.message ?: "błąd sieci"
-                        ApiLog.record(displayName, "stream/${tier.tier}", url, -1, lastError, ok = false)
+                        ApiLog.record(displayName, "stream/${tier.tier}", manifestUrl, -1, lastError, ok = false)
+                    }
+
+                    // 2) starszy format: /track/ — bezpośredni adres albo redirect na CDN
+                    val legacyUrl = "$base/track/?id=$tid&quality=${tier.tier}"
+                    try {
+                        val resp = get(legacyUrl)
+                        if (resp.code in 200..299) {
+                            val stream = TrackParser.extractStreamUrl(resp.body)
+                                ?: (if (resp.finalUrl != legacyUrl) resp.finalUrl else null)
+                            if (stream != null) {
+                                instanceIndex = (instanceIndex + i) % n
+                                ApiLog.record(displayName, "stream/${tier.tier}", legacyUrl, resp.code, stream.take(140), ok = true)
+                                return@withContext StreamResult.Success(stream, tier.tier)
+                            }
+                            lastError = "brak adresu strumienia (${resp.body.take(120)})"
+                            ApiLog.record(displayName, "stream/${tier.tier}", legacyUrl, resp.code, lastError, ok = false)
+                        } else {
+                            lastError = "HTTP ${resp.code}: ${resp.body.take(120)}"
+                            ApiLog.record(displayName, "stream/${tier.tier}", legacyUrl, resp.code, resp.body.take(160), ok = false)
+                        }
+                    } catch (e: Exception) {
+                        lastError = e.message ?: "błąd sieci"
+                        ApiLog.record(displayName, "stream/${tier.tier}", legacyUrl, -1, lastError, ok = false)
                     }
                 }
             }
             StreamResult.Error("Monochrome: $lastError")
         }
+
+    /**
+     * Parametry `/trackManifests/` dla tieru: (quality, formats).
+     * Mapowanie zgodne z upstream (getTrackManifestFormats):
+     * LOW->HEAACV1, HIGH->AACLC, LOSSLESS->FLAC, HI_RES(_LOSSLESS)->FLAC_HIRES.
+     */
+    private fun manifestFormatFor(tier: AudioQuality): Pair<String, String> = when (tier) {
+        AudioQuality.LOW -> "LOW" to "HEAACV1"
+        AudioQuality.HIGH -> "HIGH" to "AACLC"
+        AudioQuality.LOSSLESS -> "LOSSLESS" to "FLAC"
+        AudioQuality.HI_RES, AudioQuality.HI_RES_LOSSLESS -> "HI_RES_LOSSLESS" to "FLAC_HIRES"
+    }
 
     override suspend fun testConnection(): SourceStatus = withContext(Dispatchers.IO) {
         val tracks = searchTracks("a", 1)
@@ -168,12 +209,24 @@ class MonochromeSource(
     companion object {
         const val ID_PREFIX = "mono"
 
+        /**
+         * Aktualna lista instancji (z public/instances.json oficjalnego repo).
+         * Kolejność ma znaczenie — pierwsze są te, które odpowiadają. Instancje
+         * `*.monochrome.tf` bywały czasowo wyłączone (404/503/suspended), dlatego
+         * sprawdzony `monochrome-api.samidy.com` jest pierwszy.
+         */
         val DEFAULT_INSTANCES: List<String> = listOf(
-            "https://api.monochrome.tf",
+            "https://monochrome-api.samidy.com",
             "https://eu-central.monochrome.tf",
-            "https://eu-central-2.monochrome.tf",
-            "https://frankfurt-2.monochrome.tf",
-            "https://tidal-proxy.monochrome.tf",
+            "https://us-west.monochrome.tf",
+            "https://arran.monochrome.tf",
+            "https://api.monochrome.tf",
+            "https://triton.squid.wtf",
+            "https://wolf.qqdl.site",
+            "https://maus.qqdl.site",
+            "https://vogel.qqdl.site",
+            "https://hund.qqdl.site",
+            "https://tidal.kinoplus.online",
         )
     }
 }
