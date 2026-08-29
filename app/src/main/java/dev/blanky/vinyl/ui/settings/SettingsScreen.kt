@@ -45,6 +45,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.blanky.vinyl.BuildConfig
@@ -52,6 +53,8 @@ import dev.blanky.vinyl.VinylApplication
 import dev.blanky.vinyl.data.model.AudioQuality
 import dev.blanky.vinyl.data.settings.VinylSettings
 import dev.blanky.vinyl.data.source.ApiLog
+import dev.blanky.vinyl.data.source.octave.OctaveAuthState
+import dev.blanky.vinyl.data.source.octave.OctaveLoginResult
 import kotlinx.coroutines.launch
 
 @Composable
@@ -66,6 +69,8 @@ fun SettingsScreen(app: VinylApplication, modifier: Modifier = Modifier) {
     val searchTpl by settings.octaveSearchTemplate.collectAsStateWithLifecycle(VinylSettings.DEFAULT_OCTAVE_SEARCH)
     val streamTpl by settings.octaveStreamTemplate.collectAsStateWithLifecycle(VinylSettings.DEFAULT_OCTAVE_STREAM)
     val status by app.sources.status.collectAsStateWithLifecycle(initialValue = emptyMap())
+    val authState by app.sources.octave.auth.collectAsStateWithLifecycle(initialValue = OctaveAuthState())
+    val loginTpl by settings.octaveLoginTemplate.collectAsStateWithLifecycle(initialValue = "")
 
     var showQualityMenu by remember { mutableStateOf(false) }
     var testingMono by remember { mutableStateOf(false) }
@@ -73,11 +78,15 @@ fun SettingsScreen(app: VinylApplication, modifier: Modifier = Modifier) {
     var probing by remember { mutableStateOf(false) }
     var probeResult by remember { mutableStateOf<String?>(null) }
     var showDiagnostics by remember { mutableStateOf(false) }
+    var keyField by remember { mutableStateOf("") }
 
     // Test połączeń przy wejściu w ustawienia.
     LaunchedEffect(Unit) {
         scope.launch { app.sources.testSource("monochrome") }
-        if (octaveEnabled) scope.launch { app.sources.testSource("octave") }
+        if (octaveEnabled) {
+            scope.launch { app.sources.testSource("octave") }
+            scope.launch { app.sources.octave.refreshAuthFromStoredKey() }
+        }
     }
 
     LazyColumn(
@@ -254,6 +263,91 @@ fun SettingsScreen(app: VinylApplication, modifier: Modifier = Modifier) {
                             color = MaterialTheme.colorScheme.primary,
                         )
                     }
+                }
+            }
+        }
+
+        // ---------- Konto Octave ----------
+        if (octaveEnabled) {
+            item { SectionTitle("Konto Octave (klucz)") }
+            item {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "Octave nie ma hasła — konto to klucz (frasa odzyskiwania). Wygenerujesz go w serwisie: octavestreaming.com → Settings → Account & sync → „Create account” / „I have a key”. Zalogowane konto odblokowuje pełne strumienie; bez konta gra 30-sekundowy preview.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    when {
+                        authState.loggedIn -> {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = "✓ Zalogowano",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                OutlinedButton(
+                                    onClick = {
+                                        scope.launch {
+                                            app.sources.octave.logout()
+                                            keyField = ""
+                                        }
+                                    },
+                                ) { Text("Wyloguj") }
+                            }
+                            authState.detail?.let {
+                                Text(
+                                    text = it,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                        else -> {
+                            OutlinedTextField(
+                                value = keyField,
+                                onValueChange = { keyField = it },
+                                label = { Text("Klucz konta") },
+                                singleLine = true,
+                                visualTransformation = PasswordVisualTransformation(),
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(10.dp),
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                OutlinedButton(
+                                    onClick = {
+                                        scope.launch {
+                                            val result = app.sources.octave.loginWithKey(keyField)
+                                            if (result is OctaveLoginResult.Success) keyField = ""
+                                        }
+                                    },
+                                    enabled = keyField.isNotBlank() && !authState.busy,
+                                ) {
+                                    if (authState.busy) {
+                                        CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                                    } else {
+                                        Text("Zaloguj")
+                                    }
+                                }
+                            }
+                            authState.detail?.let {
+                                Text(
+                                    text = it,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
+                    OutlinedTextField(
+                        value = loginTpl,
+                        onValueChange = { scope.launch { settings.setOctaveLoginTemplate(it) } },
+                        label = { Text("Endpoint logowania (opcjonalny)") },
+                        placeholder = { Text("np. POST /api/account/login — puste = auto-wykrywanie") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(10.dp),
+                    )
                 }
             }
         }

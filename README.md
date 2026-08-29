@@ -21,6 +21,8 @@ z drugim źródłem **Octave** dla brakujących utworów.
 - 🔧 **Diagnostyka API w aplikacji** — log wywołań w Ustawieniach (kluczowe przy
   niedokumentowanych endpointach)
 - 🔁 **Failover instancji Monochrome** — kilka mirrorów, automatyczne przełączanie
+- 🔑 **Logowanie do Octave kluczem konta** — pełne strumienie zamiast 30-sekundowego
+  preview (konto: octavestreaming.com → Settings → Account & sync)
 - 🧪 Testy jednostkowe (parser JSON, kolejka, modele)
 
 ## Jak zbudować APK
@@ -115,6 +117,20 @@ W ustawieniach:
 > wymaga tokenu, a `GET /api/playback-token` dla anonimowych klientów zwraca
 > `{"gated":true,"reason":"no-account"}`. Dlatego gdy utwór jest `gated`,
 > aplikacja odtwarza dostępny 30-sekundowy `preview` zamiast pełnego strumienia.
+
+### Konto Octave (klucz)
+
+Octave nie ma hasła — konto to **klucz (frasa odzyskiwania)**, generowany w
+serwisie (Settings → Account & sync → „Create account” / „I have a key”).
+W Ustawieniach Vinyl → „Konto Octave (klucz)”:
+
+- wklej klucz i kliknij **Zaloguj** — aplikacja próbuje standardowych wariantów
+  endpointu logowania, a potem pobiera **playback-token** (`GET /api/playback-token`),
+- po zalogowaniu pełne strumienie grają z `/audio/{quality}?track={id}&token=…`,
+- **Diagnostyka** pokazuje każdą próbę logowania/tokenu — jeśli auto-wykrywanie
+  nie trafi w działający endpoint (API jest nieudokumentowane), wpisz dokładny
+  adres w polu „Endpoint logowania (opcjonalny)”, np. `POST /api/account/login`,
+- bez klucza/konta gra preview (30 s).
 
 Jak poznasz dokładne adresy endpointów (np. z [Discorda Octave](https://discord.gg/5cZAbW3Tbg)),
 wklej je w ustawieniach — reszta (parser, odtwarzanie, kolejka) już działa.

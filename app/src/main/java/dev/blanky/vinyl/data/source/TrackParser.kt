@@ -67,6 +67,67 @@ object TrackParser {
         return null
     }
 
+    // ---- parsowanie odpowiedzi uwierzytelniania Octave ----
+
+    /** Odpowiedź `/api/playback-token`: `{"token": ..., "expiresIn": ..., "gated": ..., "reason": ...}`. */
+    data class PlaybackToken(
+        val token: String?,
+        val expiresInSec: Long?,
+        val gated: Boolean,
+        val reason: String?,
+    )
+
+    private val TOKEN_KEYS: Set<String> = setOf(
+        "token", "accesstoken", "access_token", "sessiontoken", "session_token",
+        "authtoken", "auth_token", "jwt", "apikey", "api_key", "accounttoken",
+    )
+
+    /** Parsuje odpowiedź `/api/playback-token`. null = „to nie wygląda na odpowiedź tokenu”. */
+    fun parsePlaybackToken(raw: String): PlaybackToken? {
+        val root = runCatching { json.parseToJsonElement(raw) }.getOrNull() ?: return null
+        val obj = root as? JsonObject ?: return null
+        val token = obj.stringValue(TOKEN_KEYS)?.takeIf { it.isNotBlank() && it != "null" }
+        val expiresIn = obj.number("expiresIn")?.toLong() ?: obj.number("expires_in")?.toLong()
+        // gated może być booleanem (true) albo stringiem ("true")
+        val gated = (obj["gated"] as? JsonPrimitive)?.contentOrNull.equals("true")
+        val reason = obj.text("reason")
+        if (token == null && !gated && reason == null) return null
+        return PlaybackToken(token, expiresIn, gated, reason)
+    }
+
+    /** Czy odpowiedź wygląda jak błąd (`{"error": ...}` / `{"success": false}` / `{"detail": "Not Found"}`). */
+    fun isErrorResponse(raw: String): Boolean {
+        val root = runCatching { json.parseToJsonElement(raw) }.getOrNull() ?: return false
+        return hasErrorShape(root)
+    }
+
+    /** Wyciąga token z odpowiedzi logowania (dowolny klucz z TOKEN_KEYS, rekurencyjnie). */
+    fun extractAuthToken(raw: String): String? {
+        val root = runCatching { json.parseToJsonElement(raw) }.getOrNull() ?: return null
+        return findToken(root)
+    }
+
+    private fun findToken(element: JsonElement): String? {
+        when (element) {
+            is JsonObject -> {
+                element.stringValue(TOKEN_KEYS)?.let { return it }
+                for (value in element.values) findToken(value)?.let { return it }
+            }
+            is JsonArray -> for (child in element) findToken(child)?.let { return it }
+            is JsonPrimitive, is JsonNull -> Unit
+        }
+        return null
+    }
+
+    private fun JsonObject.stringValue(keys: Set<String>): String? {
+        for ((key, value) in entries) {
+            if (key.lowercase() in keys && value is JsonPrimitive && !value.isNull) {
+                value.contentOrNull?.takeIf { it.isNotBlank() && it != "null" }?.let { return it }
+            }
+        }
+        return null
+    }
+
     // ---- wyłanianie adresu strumienia z odpowiedzi /track/ ----
 
     /** Klucze, pod którymi API najczęściej chowa adres strumienia/manifestu. */

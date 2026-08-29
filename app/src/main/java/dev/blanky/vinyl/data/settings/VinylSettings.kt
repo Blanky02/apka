@@ -20,6 +20,8 @@ class VinylSettings(private val context: Context) {
         val OCTAVE_BASE = stringPreferencesKey("octave_base")
         val OCTAVE_SEARCH = stringPreferencesKey("octave_search_template")
         val OCTAVE_STREAM = stringPreferencesKey("octave_stream_template")
+        val OCTAVE_KEY = stringPreferencesKey("octave_account_key")
+        val OCTAVE_LOGIN = stringPreferencesKey("octave_login_template")
     }
 
     val preferredQuality: Flow<AudioQuality> = context.settingsStore.data
@@ -40,6 +42,14 @@ class VinylSettings(private val context: Context) {
     val octaveStreamTemplate: Flow<String> = context.settingsStore.data
         .map { p -> p[Keys.OCTAVE_STREAM] ?: DEFAULT_OCTAVE_STREAM }
 
+    /** Klucz konta Octave (frasa odzyskiwania z octavestreaming.com). Pusty = brak. */
+    val octaveKey: Flow<String> = context.settingsStore.data
+        .map { p -> p[Keys.OCTAVE_KEY] ?: "" }
+
+    /** Własny szablon endpointu logowania (metoda+ścieżka), np. "POST /api/account/login". */
+    val octaveLoginTemplate: Flow<String> = context.settingsStore.data
+        .map { p -> p[Keys.OCTAVE_LOGIN] ?: "" }
+
     suspend fun setPreferredQuality(quality: AudioQuality) =
         context.settingsStore.edit { it[Keys.QUALITY] = quality.name }
 
@@ -57,6 +67,12 @@ class VinylSettings(private val context: Context) {
 
     suspend fun setOctaveStreamTemplate(template: String) =
         context.settingsStore.edit { it[Keys.OCTAVE_STREAM] = template }
+
+    suspend fun setOctaveKey(key: String) =
+        context.settingsStore.edit { it[Keys.OCTAVE_KEY] = key.trim() }
+
+    suspend fun setOctaveLoginTemplate(template: String) =
+        context.settingsStore.edit { it[Keys.OCTAVE_LOGIN] = template.trim() }
 
     companion object {
         const val DEFAULT_OCTAVE_BASE = "https://api.octavestreaming.com"

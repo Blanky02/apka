@@ -1,6 +1,7 @@
 package dev.blanky.vinyl.data.source
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -183,5 +184,44 @@ class TrackParserTest {
         assertNull(TrackParser.extractManifestUri("""{"detail":"Not Found"}"""))
         assertNull(TrackParser.extractManifestUri("""{"data":{"id":1}}"""))
         assertNull(TrackParser.extractManifestUri("not json"))
+    }
+
+    @Test
+    fun `parsePlaybackToken reads token and gated`() {
+        val ok = TrackParser.parsePlaybackToken("""{"token":"abc123","expiresIn":3600,"gated":false}""")
+        assertNotNull(ok)
+        assertEquals("abc123", ok!!.token)
+        assertEquals(3600L, ok.expiresInSec)
+        assertEquals(false, ok.gated)
+
+        val gated = TrackParser.parsePlaybackToken("""{"token":null,"expiresIn":0,"gated":true,"reason":"no-account"}""")
+        assertNotNull(gated)
+        assertNull(gated!!.token)
+        assertEquals(true, gated.gated)
+        assertEquals("no-account", gated.reason)
+    }
+
+    @Test
+    fun `parsePlaybackToken null for non token shape`() {
+        assertNull(TrackParser.parsePlaybackToken("not json"))
+        assertNull(TrackParser.parsePlaybackToken("""{"foo":"bar"}"""))
+    }
+
+    @Test
+    fun `extractAuthToken finds token under typical keys`() {
+        assertEquals("tok1", TrackParser.extractAuthToken("""{"token":"tok1"}"""))
+        assertEquals("tok2", TrackParser.extractAuthToken("""{"data":{"access_token":"tok2"}}"""))
+        assertEquals("tok3", TrackParser.extractAuthToken("""{"user":{"sessionToken":"tok3"}}"""))
+        assertNull(TrackParser.extractAuthToken("""{"ok":true}"""))
+    }
+
+    @Test
+    fun `isErrorResponse detects errors`() {
+        assertTrue(TrackParser.isErrorResponse("""{"error":"nope"}"""))
+        assertTrue(TrackParser.isErrorResponse("""{"detail":"Not Found"}"""))
+        assertTrue(TrackParser.isErrorResponse("""{"success":false}"""))
+        assertTrue(TrackParser.isErrorResponse("""{"gated":true,"reason":"no-account"}"""))
+        assertFalse(TrackParser.isErrorResponse("""{"ok":true}"""))
+        assertFalse(TrackParser.isErrorResponse("""{"token":"x"}"""))
     }
 }
