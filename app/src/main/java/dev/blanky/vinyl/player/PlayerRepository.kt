@@ -2,7 +2,6 @@ package dev.blanky.vinyl.player
 
 import android.app.Application
 import android.content.ComponentName
-import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import androidx.core.content.ContextCompat
@@ -11,26 +10,31 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.Timeline
 import androidx.media3.session.MediaController
+import androidx.media3.session.SessionToken
 import dev.blanky.vinyl.data.model.Track
 import dev.blanky.vinyl.data.settings.VinylSettings
 import dev.blanky.vinyl.data.source.ApiLog
 import dev.blanky.vinyl.data.source.SourceManager
 import dev.blanky.vinyl.data.source.StreamResult
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
@@ -44,6 +48,9 @@ import kotlinx.coroutines.withContext
  * Adresy strumieni są wyłaniane (resolve) przed wgraniem kolejki do
  * odtwarzacza. Przy błędzie odtwarzania (np. wygasły URL CDN) pobieramy
  * świeży adres i gramy ponownie (max 2 ponowienia na utwór).
+ *
+ * Połączenie z serwisem jest nawiązywane leniwie (MediaController.Builder
+ * zwraca ListenableFuture) i odnawiane, gdy system zabije PlayerService.
  */
 class PlayerRepository(
     private val app: Application,
@@ -52,13 +59,16 @@ class PlayerRepository(
 ) {
     private val mainScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val ioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val mainExecutor by lazy { ContextCompat.getMainExecutor(app) }
 
-    private val controller: MediaController by lazy {
-        MediaController.Builder(
-            app,
-            ComponentName(app, PlayerService::class.java),
-        ).buildAsync()
-    }
+    private val sessionToken = SessionToken(app, ComponentName(app, PlayerService::class.java))
+
+    /** Podłączony kontroler; null = brak połączenia (jeszcze nie lub już nie). */
+    @Volatile
+    private var controller: MediaController? = null
+
+    /** Trwające łączenie — żeby równoległe wywołania nie tworzyły kilku kontrolerów. */
+    private var connecting: CompletableDeferred<MediaController>? = null
 
     // ---- stan udostępniany UI ----
 
@@ -83,8 +93,9 @@ class PlayerRepository(
     private val _repeatMode = MutableStateFlow(Player.REPEAT_MODE_OFF)
     val repeatMode: StateFlow<Int> = _repeatMode.asStateFlow()
 
-    private val _shuffleMode = MutableStateFlow(Player.SHUFFLE_MODE_OFF)
-    val shuffleMode: StateFlow<Int> = _shuffleMode.asStateFlow()
+    /** Media3 1.5+ zna shuffle jako boolean (konstanty `SHUFFLE_MODE_*` zniknęły z Playera). */
+    private val _shuffleMode = MutableStateFlow(false)
+    val shuffleMode: StateFlow<Boolean> = _shuffleMode.asStateFlow()
 
     /** "Przygotowuję kolejkę x/y" — null, gdy nic się nie dzieje. */
     private val _preparing = MutableStateFlow<PreparingInfo?>(null)
@@ -109,56 +120,49 @@ class PlayerRepository(
     private var ticker: AtomicReference<Job> = AtomicReference(null)
     private val retryAttempts = ConcurrentHashMap<String, Int>()
 
-    init {
-        mainScope.launch {
-            controller.addListener(object : MediaController.Listener {
-                override fun onIsPlayingChanged(isPlaying: Boolean) {
-                    _isPlaying.value = isPlaying
-                }
+    // ---- nasłuchiwanie odtwarzacza i sesji ----
 
-                override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-                    _currentIndex.value = controller.currentMediaItemIndex.coerceAtLeast(0)
-                    _positionMs.value = 0L
-                    retryAttempts.clear()
-                    startPositionTicker()
-                }
-
-                override fun onIsTimelineChanged() {
-                    val d = controller.duration
-                    _durationMs.value = if (d > 0 && d != C.TIME_UNSET) d else 0L
-                }
-
-                override fun onSessionReady() {
-                    _repeatMode.value = controller.repeatMode
-                    _shuffleMode.value = controller.shuffleMode
-                    // Serwis mógł zostać zresetowany (kill procesu) — przywracamy kolejkę.
-                    if (controller.mediaItemCount == 0 && mediaItems.isNotEmpty()) {
-                        val idx = if (_currentIndex.value >= 0 && _currentIndex.value < mediaItems.size) {
-                            _currentIndex.value
-                        } else {
-                            0
-                        }
-                        mainScope.launch {
-                            controller.setMediaItems(mediaItems, idx, 0)
-                            controller.prepare()
-                            controller.play()
-                        }
-                    }
-                }
-
-                override fun onRepeatModeChanged(mode: Int) {
-                    _repeatMode.value = mode
-                }
-
-                override fun onShuffleModeChanged(mode: Int) {
-                    _shuffleMode.value = mode
-                }
-
-                override fun onPlayerError(error: PlaybackException) {
-                    handlePlaybackError()
-                }
-            })
+    /** Zdarzenia odtwarzacza: kolejka, pozycja, tryby, błędy. */
+    private val playerListener = object : Player.Listener {
+        override fun onIsPlayingChanged(isPlaying: Boolean) {
+            _isPlaying.value = isPlaying
         }
+
+        override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+            val c = controller ?: return
+            _currentIndex.value = c.currentMediaItemIndex.coerceAtLeast(0)
+            _positionMs.value = 0L
+            retryAttempts.clear()
+            startPositionTicker()
+        }
+
+        override fun onTimelineChanged(timeline: Timeline, reason: Int) {
+            publishDuration()
+        }
+
+        override fun onRepeatModeChanged(repeatMode: Int) {
+            _repeatMode.value = repeatMode
+        }
+
+        override fun onShuffleModeEnabledChanged(shuffleModeEnabled: Boolean) {
+            _shuffleMode.value = shuffleModeEnabled
+        }
+
+        override fun onPlayerError(error: PlaybackException) {
+            handlePlaybackError()
+        }
+    }
+
+    /** Zdarzenia sesji: rozłączenie (serwis zabity przez system) czyści uchwyt. */
+    private val sessionListener = object : MediaController.Listener {
+        override fun onDisconnected(disconnected: MediaController) {
+            if (controller === disconnected) controller = null
+            connecting = null
+            _isPlaying.value = false
+        }
+    }
+
+    init {
         mainScope.launch {
             combine(_queue, _currentIndex) { tracks, index -> tracks.getOrNull(index) }
                 .collect { _currentTrack.value = it }
@@ -186,19 +190,19 @@ class PlayerRepository(
                 }
                 val missing = tracks.size - playableTracks.size
                 if (missing > 0) {
-                    _notice.value = "$missing z ${tracks.size} utworów niedostępnych w tej jakości — pomięte."
+                    _notice.value = "$missing z ${tracks.size} utworów niedostępnych w tej jakości — pominięte."
                 }
                 val targetId = tracks.getOrNull(startIndex)?.id ?: playableTracks.first().id
                 val idx = playableTracks.indexOfFirst { it.id == targetId }.coerceAtLeast(0)
-                val items = playableTracks.map { buildMediaItem(it, urls[it.id]!!) }
-                mainScope.launch {
-                    ensureServiceStarted()
+                val items = playableTracks.map { buildMediaItem(it, urls.getValue(it.id)) }
+                withContext(Dispatchers.Main) {
                     mediaItems = items
-                    controller.setMediaItems(items, idx, 0)
+                    val c = awaitController()
+                    c.setMediaItems(items, idx, 0)
                     _currentIndex.value = idx
                     _durationMs.value = playableTracks[idx].durationMs ?: 0L
-                    controller.prepare()
-                    controller.play()
+                    c.prepare()
+                    c.play()
                 }
             } catch (e: Exception) {
                 if (gen == generation) {
@@ -221,8 +225,7 @@ class PlayerRepository(
         _queue.value = q + track
         _preparing.value = PreparingInfo(0, 1)
         ioScope.launch {
-            val ok = tryEnqueue(track, index)
-            if (!ok) {
+            if (!enqueue(track, index)) {
                 // wyciągamy utwór, którego nie udało się pobrać
                 _queue.value = _queue.value.filterNot { it.id == track.id }
                 _notice.value = "Nie udało się pobrać strumienia: ${track.title}"
@@ -243,8 +246,7 @@ class PlayerRepository(
         _queue.value = newQ
         _preparing.value = PreparingInfo(0, 1)
         ioScope.launch {
-            val ok = tryEnqueue(track, index)
-            if (!ok) {
+            if (!enqueue(track, index)) {
                 _queue.value = _queue.value.filterNot { it.id == track.id }
                 _notice.value = "Nie udało się pobrać strumienia: ${track.title}"
             }
@@ -267,19 +269,17 @@ class PlayerRepository(
             return
         }
         if (removingCurrent) {
-            val nextIdx = if (index < newQ.size) index else newQ.size - 1
+            val nextIdx = QueueOps.resumeIndex(index, newQ.size)
             _currentIndex.value = nextIdx
-            mainScope.launch {
-                controller.stop()
-                controller.setMediaItems(newItems, nextIdx, 0)
-                controller.prepare()
-                controller.play()
+            withController { c ->
+                c.stop()
+                c.setMediaItems(newItems, nextIdx, 0)
+                c.prepare()
+                c.play()
             }
-        } else if (index < current) {
-            _currentIndex.value = current - 1
-            mainScope.launch { controller.removeMediaItem(index) }
         } else {
-            mainScope.launch { controller.removeMediaItem(index) }
+            if (index < current) _currentIndex.value = current - 1
+            withController { c -> c.removeMediaItem(index) }
         }
     }
 
@@ -292,44 +292,37 @@ class PlayerRepository(
         stopEverything()
     }
 
-    fun skipToNext() = mainScope.launch { controller.seekToNext() }
+    fun skipToNext() = withController { c -> c.seekToNext() }
 
-    fun skipToPrevious() = mainScope.launch {
-        if (controller.currentPosition > 3000) controller.seekTo(0)
-        else controller.seekToPrevious()
+    fun skipToPrevious() = withController { c ->
+        if (c.currentPosition > 3000) c.seekTo(0) else c.seekToPrevious()
     }
 
     fun togglePlayPause() {
-        mainScope.launch {
-            if (controller.mediaItemCount == 0) return@launch
-            ensureServiceStarted()
-            if (_isPlaying.value) controller.pause() else controller.play()
+        withController { c ->
+            if (c.mediaItemCount == 0) return@withController
+            if (_isPlaying.value) c.pause() else c.play()
         }
     }
 
     fun seekTo(positionMs: Long) {
         val pos = positionMs.coerceAtLeast(0)
-        mainScope.launch { controller.seekTo(pos) }
         _positionMs.value = pos
+        withController { c -> c.seekTo(pos) }
     }
 
     fun toggleShuffle() {
-        mainScope.launch {
-            controller.setShuffleMode(
-                if (_shuffleMode.value == Player.SHUFFLE_MODE_OFF) Player.SHUFFLE_MODE_OTHER
-                else Player.SHUFFLE_MODE_OFF
-            )
-        }
+        withController { c -> c.setShuffleModeEnabled(!_shuffleMode.value) }
     }
 
     fun cycleRepeat() {
-        mainScope.launch {
+        withController { c ->
             val next = when (_repeatMode.value) {
                 Player.REPEAT_MODE_OFF -> Player.REPEAT_MODE_ALL
                 Player.REPEAT_MODE_ALL -> Player.REPEAT_MODE_ONE
                 else -> Player.REPEAT_MODE_OFF
             }
-            controller.setRepeatMode(next)
+            c.setRepeatMode(next)
         }
     }
 
@@ -337,24 +330,107 @@ class PlayerRepository(
         _notice.value = null
     }
 
+    // ---- połączenie z PlayerService ----
+
+    /**
+     * Zwraca podłączony [MediaController], łącząc się z serwisem w razie potrzeby.
+     * Media3 wymaga jednego wątku aplikacji, więc wszystko dzieje się na Main.
+     */
+    private suspend fun awaitController(): MediaController = withContext(Dispatchers.Main) {
+        controller?.takeIf { it.isConnected }?.let { return@withContext it }
+        (connecting ?: startConnecting().also { connecting = it }).await()
+    }
+
+    private fun startConnecting(): CompletableDeferred<MediaController> {
+        val deferred = CompletableDeferred<MediaController>()
+        val future = MediaController.Builder(app, sessionToken)
+            .setListener(sessionListener)
+            .buildAsync()
+        future.addListener({
+            try {
+                val connected = checkNotNull(future.get()) { "Brak MediaControllera" }
+                controller = connected
+                connected.addListener(playerListener)
+                connecting = null
+                onControllerConnected(connected)
+                deferred.complete(connected)
+            } catch (e: Exception) {
+                connecting = null
+                deferred.completeExceptionally(e)
+            }
+        }, mainExecutor)
+        return deferred
+    }
+
+    /** Synchronizuje stan repo z kontrolerem tuż po połączeniu (np. po restarcie serwisu). */
+    private fun onControllerConnected(c: MediaController) {
+        _repeatMode.value = c.repeatMode
+        _shuffleMode.value = c.shuffleModeEnabled
+        _isPlaying.value = c.isPlaying
+        if (c.mediaItemCount > 0) _currentIndex.value = c.currentMediaItemIndex
+        startPositionTicker()
+        publishDuration()
+
+        // Serwis mógł zostać zresetowany (kill procesu) — przywracamy kolejkę.
+        if (c.mediaItemCount == 0 && mediaItems.isNotEmpty()) {
+            val idx = if (_currentIndex.value in mediaItems.indices) _currentIndex.value else 0
+            c.setMediaItems(mediaItems, idx, 0)
+            c.prepare()
+            c.play()
+        }
+    }
+
+    /** Odpala operację na kontrolerze; błąd połączenia ląduje w [notice]. */
+    private fun withController(block: suspend (MediaController) -> Unit): Unit {
+        mainScope.launch {
+            try {
+                block(awaitController())
+            } catch (e: Exception) {
+                _notice.value = "Odtwarzacz niedostępny: ${e.message ?: e::class.simpleName}"
+            }
+        }
+    }
+
     // ---- wewnętrzne ----
+
+    /** Wyłania strumień i dokłada item do kontrolera; błąd sieci nie zabija apki. */
+    private suspend fun enqueue(track: Track, index: Int): Boolean =
+        try {
+            tryEnqueue(track, index)
+        } catch (e: Exception) {
+            ApiLog.record(
+                sources.sourceFor(track).displayName,
+                "enqueue",
+                track.id,
+                -1,
+                e.message ?: "błąd",
+                ok = false,
+            )
+            false
+        }
 
     /** Wyłania strumień i dokłada item do kontrolera. true = sukces. */
     private suspend fun tryEnqueue(track: Track, index: Int): Boolean {
         val quality = settings.preferredQuality.first()
         val result = sources.resolveStream(track, quality)
         if (result !is StreamResult.Success) {
-            ApiLog.record(sources.sourceFor(track).displayName, "resolve", track.id, -1, (result as StreamResult.Error).message, ok = false)
+            ApiLog.record(
+                sources.sourceFor(track).displayName,
+                "resolve",
+                track.id,
+                -1,
+                (result as StreamResult.Error).message,
+                ok = false,
+            )
             return false
         }
         val item = buildMediaItem(track, result.url)
         withContext(Dispatchers.Main) {
             mediaItems = mediaItems.toMutableList().also {
-                if (index > it.size) it.add(item) else it.add(index.coerceIn(0, it.size), item)
+                it.add(index.coerceIn(0, it.size), item)
             }
-            if (controller.isInitialized) {
-                controller.addMediaItem(item, index.coerceIn(0, controller.mediaItemCount))
-            }
+            val c = awaitController()
+            c.addMediaItem(index.coerceIn(0, c.mediaItemCount), item)
         }
         return true
     }
@@ -362,7 +438,7 @@ class PlayerRepository(
     private suspend fun resolveAll(tracks: List<Track>, gen: Int): Map<String, String> {
         val quality = settings.preferredQuality.first()
         val out = ConcurrentHashMap<String, String>()
-        var done = 0
+        val done = AtomicInteger(0)
         coroutineScope {
             val semaphore = Semaphore(4)
             tracks.map { track ->
@@ -372,10 +448,17 @@ class PlayerRepository(
                             val result = sources.resolveStream(track, quality)
                             if (result is StreamResult.Success) out[track.id] = result.url
                         } catch (e: Exception) {
-                            ApiLog.record(sources.sourceFor(track).displayName, "resolve", track.id, -1, e.message ?: "błąd", ok = false)
+                            ApiLog.record(
+                                sources.sourceFor(track).displayName,
+                                "resolve",
+                                track.id,
+                                -1,
+                                e.message ?: "błąd",
+                                ok = false,
+                            )
                         }
-                        done++
-                        if (gen == generation) _preparing.value = PreparingInfo(done, tracks.size)
+                        val finished = done.incrementAndGet()
+                        if (gen == generation) _preparing.value = PreparingInfo(finished, tracks.size)
                     }
                 }
             }.awaitAll()
@@ -384,23 +467,22 @@ class PlayerRepository(
     }
 
     private fun buildMediaItem(track: Track, url: String): MediaItem {
-        val metadata = MediaMetadata.Builder()
-            .setTitle(track.title)
-            .setArtist(track.artistText)
-            .setAlbumTitle(track.album)
-            .apply {
-                track.coverUrl?.let { setArtworkUri(Uri.parse(it)) }
-            }
-            .build()
         val extras = Bundle().apply {
             putString("trackId", track.id)
             putString("sourceId", track.sourceId)
         }
+        val metadata = MediaMetadata.Builder()
+            .setTitle(track.title)
+            .setArtist(track.artistText)
+            .setAlbumTitle(track.album)
+            .setArtworkUri(track.coverUrl?.takeIf { it.isNotBlank() }?.let { Uri.parse(it) })
+            // MediaItem.Builder nie ma setExtras — metadane są właściwym miejscem.
+            .setExtras(extras)
+            .build()
         return MediaItem.Builder()
             .setUri(Uri.parse(url))
             .setMediaId(track.id)
             .setMediaMetadata(metadata)
-            .setExtras(extras)
             .build()
     }
 
@@ -419,14 +501,16 @@ class PlayerRepository(
                 val result = sources.resolveStream(track, quality)
                 if (result is StreamResult.Success) {
                     val newItem = buildMediaItem(track, result.url)
-                    mainScope.launch {
-                        val index = controller.currentMediaItemIndex.coerceAtLeast(0)
-                        if (index < mediaItems.size) {
+                    withContext(Dispatchers.Main) {
+                        val c = awaitController()
+                        val index = c.currentMediaItemIndex
+                        if (index !in 0 until c.mediaItemCount) return@withContext
+                        if (index in mediaItems.indices) {
                             mediaItems = mediaItems.toMutableList().also { it[index] = newItem }
                         }
-                        controller.replaceMediaItem(index, newItem)
-                        controller.seekTo(index, 0)
-                        controller.play()
+                        c.replaceMediaItem(index, newItem)
+                        c.seekTo(index, 0)
+                        c.play()
                     }
                 }
             } catch (_: Exception) {
@@ -435,17 +519,17 @@ class PlayerRepository(
         }
     }
 
-    private fun stopEverything() {
-        mainScope.launch {
-            controller.stop()
-            controller.clearMediaItems()
-        }
-        app.stopService(Intent(app, PlayerService::class.java))
+    private fun publishDuration() {
+        val c = controller ?: return
+        val d = c.duration
+        _durationMs.value = if (d > 0 && d != C.TIME_UNSET) d else 0L
     }
 
-    private fun ensureServiceStarted() {
-        val intent = Intent(app, PlayerService::class.java).setAction(PlayerService.ACTION_START)
-        ContextCompat.startForegroundService(app, intent)
+    private fun stopEverything() {
+        withController { c ->
+            c.stop()
+            c.clearMediaItems()
+        }
     }
 
     private fun startPositionTicker() {
@@ -453,10 +537,10 @@ class PlayerRepository(
         ticker.set(
             mainScope.launch {
                 while (true) {
-                    if (controller.isReady && controller.currentMediaItemIndex >= 0) {
-                        _positionMs.value = controller.currentPosition
-                        val d = controller.duration
-                        _durationMs.value = if (d > 0 && d != C.TIME_UNSET) d else 0L
+                    val c = controller
+                    if (c != null && c.isConnected && c.playbackState == Player.STATE_READY) {
+                        _positionMs.value = c.currentPosition
+                        publishDuration()
                     }
                     delay(500)
                 }
@@ -466,6 +550,12 @@ class PlayerRepository(
 
     fun shutdown() {
         ticker.getAndSet(null)?.cancel()
+        val c = controller
+        controller = null
+        connecting?.cancel()
+        connecting = null
+        // MediaController.release() wolno wołać tylko z wątku aplikacji.
+        if (c != null) mainExecutor.execute { c.release() }
         mainScope.cancel()
         ioScope.cancel()
     }

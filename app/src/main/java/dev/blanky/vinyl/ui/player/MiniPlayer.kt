@@ -10,10 +10,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.SkipNext
-import androidx.compose.material.icons.automirrored.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -65,7 +65,7 @@ fun MiniPlayer(
         }
         IconButton(onClick = { player.skipToPrevious() }) {
             Icon(
-                imageVector = Icons.AutoMirrored.Filled.SkipPrevious,
+                imageVector = Icons.Filled.SkipPrevious,
                 contentDescription = "Poprzedni",
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -79,7 +79,7 @@ fun MiniPlayer(
         }
         IconButton(onClick = { player.skipToNext() }) {
             Icon(
-                imageVector = Icons.AutoMirrored.Filled.SkipNext,
+                imageVector = Icons.Filled.SkipNext,
                 contentDescription = "Następny",
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
             )
