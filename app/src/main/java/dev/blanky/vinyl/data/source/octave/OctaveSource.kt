@@ -267,11 +267,11 @@ class OctaveSource(
                 "POST" -> {
                     val bodyKey = c.bodyKey ?: "key"
                     val body = """{"$bodyKey":"${escapeJson(key)}"}"""
-                    execute(Request.Builder().url(url).post(body.toRequestBody(jsonMediaType)))
+                    execute(Request.Builder().url(url).post(body.toRequestBody(jsonMediaType)).build())
                 }
                 else -> {
                     val q = if (c.queryKey != null) "?${c.queryKey}=${Uri.encode(key)}" else ""
-                    execute(Request.Builder().url(url + q).get())
+                    execute(Request.Builder().url(url + q).get().build())
                 }
             }
             if (resp.code in 200..299 && !TrackParser.isErrorResponse(resp.body)) {

@@ -121,7 +121,7 @@ object TrackParser {
 
     private fun JsonObject.stringValue(keys: Set<String>): String? {
         for ((key, value) in entries) {
-            if (key.lowercase() in keys && value is JsonPrimitive && !value.isNull) {
+            if (key.lowercase() in keys && value is JsonPrimitive) {
                 value.contentOrNull?.takeIf { it.isNotBlank() && it != "null" }?.let { return it }
             }
         }
