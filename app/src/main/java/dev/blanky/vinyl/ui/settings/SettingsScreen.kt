@@ -1,5 +1,8 @@
 package dev.blanky.vinyl.ui.settings
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,6 +21,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
@@ -40,6 +44,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.blanky.vinyl.BuildConfig
@@ -337,9 +342,35 @@ private fun SourceStatusText(sourceId: String, status: dev.blanky.vinyl.data.sou
 @Composable
 private fun DiagnosticsDialog(onDismiss: () -> Unit) {
     val entries = remember { ApiLog.snapshot() }
+    val context = LocalContext.current
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Log API") },
+        title = {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("Log API", modifier = Modifier.weight(1f))
+                TextButton(
+                    onClick = {
+                        val text = entries.joinToString("\n\n") { e ->
+                            "${e.time}  ${e.source}/${e.op}  ${if (e.code >= 0) "HTTP ${e.code}" else "ERR"}  ${if (e.ok) "OK" else "!!"}\n${e.url}\n${e.summary}"
+                        }
+                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        clipboard.setPrimaryClip(ClipData.newPlainText("Log API", text))
+                    },
+                    enabled = entries.isNotEmpty(),
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.ContentCopy,
+                        contentDescription = "Skopiuj log",
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text("Skopiuj")
+                }
+            }
+        },
         text = {
             if (entries.isEmpty()) {
                 Text("Brak wpisów.")
