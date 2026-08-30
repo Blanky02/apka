@@ -215,7 +215,7 @@ class MonochromeSource(
         val pollUrl = resolveStatusUrl(base, statusPath)
         ApiLog.record(
             displayName, "stream/202", url, first.code,
-            "w kolejce (poz. ${pending.queuePosition ?: "?"}) — odpytywanie $pollUrl", ok = true,
+            "w kolejce (poz. ${pending?.queuePosition ?: "?"}) — odpytywanie $pollUrl", ok = true,
         )
 
         val deadline = System.currentTimeMillis() + PLAYBACK_POLL_TIMEOUT_MS
