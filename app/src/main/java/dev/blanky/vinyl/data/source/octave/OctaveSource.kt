@@ -109,10 +109,15 @@ class OctaveSource(
                     var finalUrl = info?.url ?: directBody ?: (if (resp.finalUrl != url) resp.finalUrl else null)
                     var isPreview = false
 
-                    // pełny strumień wymaga tokenu (gated) -> /audio/{quality} z tokenem, ewentualnie preview
+                    // pełny strumień wymaga tokenu (gated) -> url z odpowiedzi + token, ewentualnie preview
                     if (info != null && info.gated) {
                         finalUrl = when {
-                            tokenFresh() -> "$base/audio/${audioQualityParam(quality)}?track=$tid&token=${Uri.encode(playbackToken.orEmpty())}"
+                            tokenFresh() -> {
+                                val streamBase = info.url
+                                    ?: "$base/audio/${audioQualityParam(quality)}?track=$tid"
+                                val sep = if (streamBase.contains("?")) "&" else "?"
+                                streamBase + sep + "token=" + Uri.encode(playbackToken.orEmpty())
+                            }
                             info.preview != null -> {
                                 isPreview = true
                                 info.preview
