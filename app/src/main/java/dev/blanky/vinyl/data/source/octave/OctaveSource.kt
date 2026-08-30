@@ -41,7 +41,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
  * Strumienie są "gated": `GET /api/playback-token` dla klientów bez konta na
  * części sieci zwraca token ({"token":"octk_…","expiresIn":1800}), a na innych
  * `{"gated":true,"reason":"no-account"}`. Octave NIE ma działającego endpointu
- * logowania (/api/account/* odpowiada 404) — dlatego token pobieramy po prostu
+ * logowania (wszystkie /api/account/ odpowiadają 404) — dlatego token pobieramy po prostu
  * (także anonimowo, bez klucza) i jeśli przyszedł, gramy pełne strumienie
  * (`/audio/{quality}?track={id}&token={...}`). Klucz konta jest opcjonalny:
  * próby logowania kończą się zwykle 404, ale niczego nie psują.
@@ -298,15 +298,11 @@ class OctaveSource(
     private suspend fun fetchPlaybackToken(key: String): TrackParser.PlaybackToken? {
         val base = settings.octaveBase.first().trimEnd('/')
         val url = "$base/api/playback-token"
-        val headerSets: List<Map<String, String>> = if (key.isBlank()) {
-            listOf(emptyMap())
-        } else {
-            listOf(
-                emptyMap(),
-                mapOf("Authorization" to "Bearer $key"),
-                mapOf("x-account-key" to key),
-                mapOf("x-octave-key" to key),
-            )
+        val headerSets = mutableListOf<Map<String, String>>(emptyMap())
+        if (key.isNotBlank()) {
+            headerSets += mapOf("Authorization" to "Bearer $key")
+            headerSets += mapOf("x-account-key" to key)
+            headerSets += mapOf("x-octave-key" to key)
         }
         for (headers in headerSets) {
             try {
