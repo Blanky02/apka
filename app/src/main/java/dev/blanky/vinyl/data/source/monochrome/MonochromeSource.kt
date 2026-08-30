@@ -210,23 +210,20 @@ class MonochromeSource(
         const val ID_PREFIX = "mono"
 
         /**
-         * Aktualna lista instancji (z public/instances.json oficjalnego repo).
-         * Kolejność ma znaczenie — pierwsze są te, które odpowiadają. Instancje
-         * `*.monochrome.tf` bywały czasowo wyłączone (404/503/suspended), dlatego
-         * sprawdzony `monochrome-api.samidy.com` jest pierwszy.
+         * Aktualna lista instancji. Upstream Monochrome odszedł od starych
+         * hostów hifi-api (eu-central/us-west/arran.monochrome.tf, *.qqdl.site,
+         * triton.squid.wtf, tidal.kinoplus.online — wszystkie obecnie martwe:
+         * 503/520/530/DNS) i kieruje ruch przez load-balancer
+         * `lol.samidy.workers.dev` (hifi-api v2.10). Zweryfikowane na żywo:
+         * search + /trackManifests/ (podpisany .mpd) + /track/ (base64 MPD)
+         * odpowiadają 200.
+         *
+         * `monochrome-api.samidy.com` zostaje jako zapasowa wyszukiwarka
+         * (search działa; strumień potrafi zwrócić 403 „Upstream API error”).
          */
         val DEFAULT_INSTANCES: List<String> = listOf(
+            "https://lol.samidy.workers.dev",
             "https://monochrome-api.samidy.com",
-            "https://eu-central.monochrome.tf",
-            "https://us-west.monochrome.tf",
-            "https://arran.monochrome.tf",
-            "https://api.monochrome.tf",
-            "https://triton.squid.wtf",
-            "https://wolf.qqdl.site",
-            "https://maus.qqdl.site",
-            "https://vogel.qqdl.site",
-            "https://hund.qqdl.site",
-            "https://tidal.kinoplus.online",
         )
     }
 }

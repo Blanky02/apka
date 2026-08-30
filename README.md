@@ -21,8 +21,8 @@ z drugim źródłem **Octave** dla brakujących utworów.
 - 🔧 **Diagnostyka API w aplikacji** — log wywołań w Ustawieniach (kluczowe przy
   niedokumentowanych endpointach)
 - 🔁 **Failover instancji Monochrome** — kilka mirrorów, automatyczne przełączanie
-- 🔑 **Logowanie do Octave kluczem konta** — pełne strumienie zamiast 30-sekundowego
-  preview (konto: octavestreaming.com → Settings → Account & sync)
+- 🔑 **Pełne strumienie Octave przez playback-token** — token pobierany anonimowo;
+  opcjonalne logowanie kluczem konta (octavestreaming.com → Settings → Account & sync)
 - 🧪 Testy jednostkowe (parser JSON, kolejka, modele)
 
 ## Jak zbudować APK
@@ -96,10 +96,15 @@ Katalog Tidal, FLAC do 24/192. Endpointy (dane społeczności):
 - `GET /cover/?id={tid}` — okładka
 
 Serwis działa z wielu instancji — kolejność i adresy:
-`MonochromeSource.DEFAULT_INSTANCES` (app sam obsługuje failover; lista jest
-zsynchronizowana z `public/instances.json` oficjalnego repo). Instancje
-`*.monochrome.tf` potrafią być czasowo wyłączone (404/503/suspended) —
-wtedy app przechodzi do kolejnych.
+`MonochromeSource.DEFAULT_INSTANCES` (app sam obsługuje failover).
+
+> ⚠️ **Stan: sierpień 2026** — upstream Monochrome odszedł od starych hostów
+> hifi-api (`*.monochrome.tf`, `*.qqdl.site`, `triton.squid.wtf`,
+> `tidal.kinoplus.online` — obecnie martwe: 503/520/530/DNS). Aktualnie ruch
+> idzie przez load-balancer **`https://lol.samidy.workers.dev`** (hifi-api v2.10),
+> który odpowiada na `search`, `/trackManifests/` i `/track/`. Dlatego jest on
+> pierwszą instancją w `DEFAULT_INSTANCES`; `monochrome-api.samidy.com` zostaje
+> jako zapasowa wyszukiwarka (search działa, strumień bywa 403).
 
 ### Octave (beta)
 `https://api.octavestreaming.com` — **nie ma publicznej dokumentacji API**.
@@ -114,9 +119,11 @@ W ustawieniach:
 - **„Wykryj API”** — testuje typowe warianty i zapisuje działający
 
 > ⚠️ Octave „gates” pełne strumieniowanie: endpoint `/audio/{quality}?track={id}`
-> wymaga tokenu, a `GET /api/playback-token` dla anonimowych klientów zwraca
-> `{"gated":true,"reason":"no-account"}`. Dlatego gdy utwór jest `gated`,
-> aplikacja odtwarza dostępny 30-sekundowy `preview` zamiast pełnego strumienia.
+> wymaga tokenu (`token=…`), a `GET /api/playback-token` zwraca token także
+> bez konta (na części sieci może zamiast tego przyjść
+> `{"gated":true,"reason":"no-account"}`). Gdy utwór jest `gated`, aplikacja
+> pobiera playback-token (anonimowo) i gra pełny strumień z
+> `/audio/{quality}?track={id}&token=…`; jeśli tokenu nie ma, odtwarza 30-sekundowy `preview`.
 
 ### Konto Octave (klucz)
 
@@ -126,11 +133,12 @@ W Ustawieniach Vinyl → „Konto Octave (klucz)”:
 
 - wklej klucz i kliknij **Zaloguj** — aplikacja próbuje standardowych wariantów
   endpointu logowania, a potem pobiera **playback-token** (`GET /api/playback-token`),
-- po zalogowaniu pełne strumienie grają z `/audio/{quality}?track={id}&token=…`,
+- **ważne (stan: sierpień 2026):** endpointy logowania `/api/account/*` odpowiadają
+  404, ale Octave wydaje playback-token **także anonimowo** — więc pełne strumienie
+  zwykle grają **bez logowania**. Klucz jest opcjonalny i niczego nie psuje,
 - **Diagnostyka** pokazuje każdą próbę logowania/tokenu — jeśli auto-wykrywanie
   nie trafi w działający endpoint (API jest nieudokumentowane), wpisz dokładny
-  adres w polu „Endpoint logowania (opcjonalny)”, np. `POST /api/account/login`,
-- bez klucza/konta gra preview (30 s).
+  adres w polu „Endpoint logowania (opcjonalny)”, np. `POST /api/account/login`.
 
 Jak poznasz dokładne adresy endpointów (np. z [Discorda Octave](https://discord.gg/5cZAbW3Tbg)),
 wklej je w ustawieniach — reszta (parser, odtwarzanie, kolejka) już działa.

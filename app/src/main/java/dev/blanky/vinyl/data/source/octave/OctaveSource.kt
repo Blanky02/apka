@@ -38,12 +38,13 @@ import okhttp3.RequestBody.Companion.toRequestBody
  *   GET /api/track/{id}[/stream]       -> {"url": ..., "preview": ..., "gated": bool}
  *   GET /api/playback-token            -> {"token": ..., "expiresIn": ..., "gated": ..., "reason": ...}
  *
- * Pełne strumieniowanie jest "gated": `GET /api/playback-token` dla klientów
- * bez konta zwraca `{"gated":true,"reason":"no-account"}`. Octave używa konta
- * opartego na **kluczu konta** (frasa z ustawień serwisu) — dlatego tutaj jest
- * logowanie kluczem: aplikacja próbuje standardowych wariantów endpointu
- * logowania, a gdy dostanie playback-token, gra pełne strumienie
- * (`/audio/{quality}?track={id}&token={...}`). Każda próba trafia do Diagnostyki.
+ * Strumienie są "gated": `GET /api/playback-token` dla klientów bez konta na
+ * części sieci zwraca token ({"token":"octk_…","expiresIn":1800}), a na innych
+ * `{"gated":true,"reason":"no-account"}`. Octave NIE ma działającego endpointu
+ * logowania (/api/account/* odpowiada 404) — dlatego token pobieramy po prostu
+ * (także anonimowo, bez klucza) i jeśli przyszedł, gramy pełne strumienie
+ * (`/audio/{quality}?track={id}&token={...}`). Klucz konta jest opcjonalny:
+ * próby logowania kończą się zwykle 404, ale niczego nie psują.
  */
 class OctaveSource(
     private val http: OkHttpClient,
@@ -94,9 +95,9 @@ class OctaveSource(
             val tid = track.id.removePrefix("$ID_PREFIX-")
             val url = buildUrl(base, template, mapOf("id" to tid, "quality" to quality.tier))
 
-            // mamy klucz, ale brak (albo wygasł) playback-token -> odśwież
+            // playback-token (bez klucza też) -> bez niego utwory gated grają tylko preview
             val key = settings.octaveKey.first().trim()
-            if (key.isNotEmpty() && !tokenFresh()) {
+            if (!tokenFresh()) {
                 fetchPlaybackToken(key)
             }
 
@@ -108,10 +109,17 @@ class OctaveSource(
                     var finalUrl = info?.url ?: directBody ?: (if (resp.finalUrl != url) resp.finalUrl else null)
                     var isPreview = false
 
-                    // pełny strumień wymaga tokenu (gated) -> zbuduj /audio/... albo preview
+                    // pełny strumień wymaga tokenu (gated) -> url z odpowiedzi + token, ewentualnie preview
                     if (info != null && info.gated) {
                         finalUrl = when {
-                            tokenFresh() -> "$base/audio/${audioQualityParam(quality)}?track=$tid&token=${Uri.encode(playbackToken.orEmpty())}"
+                            tokenFresh() -> {
+                                val streamBase = when {
+                                    info.url == null -> "$base/audio/${audioQualityParam(quality)}?track=$tid"
+                                    info.url.startsWith("http") -> info.url
+                                    else -> base + info.url
+                                }
+                                "$streamBase${if (streamBase.contains("?")) "&" else "?"}token=${Uri.encode(playbackToken.orEmpty())}"
+                            }
                             info.preview != null -> {
                                 isPreview = true
                                 info.preview
@@ -290,15 +298,23 @@ class OctaveSource(
         }
     }
 
-    /** Pobiera playback-token, próbując kilku umiejscowień klucza w nagłówkach. */
+    /**
+     * Pobiera playback-token. Octave wydaje token także anonimowo (bez klucza),
+     * więc najpierw zwykły GET; z kluczem próbujemy też kilku nagłówków.
+     */
     private suspend fun fetchPlaybackToken(key: String): TrackParser.PlaybackToken? {
         val base = settings.octaveBase.first().trimEnd('/')
         val url = "$base/api/playback-token"
-        val headerSets = listOf(
-            mapOf("Authorization" to "Bearer $key"),
-            mapOf("x-account-key" to key),
-            mapOf("x-octave-key" to key),
-        )
+        val headerSets: List<Map<String, String>> = if (key.isBlank()) {
+            listOf(emptyMap())
+        } else {
+            listOf(
+                emptyMap(),
+                mapOf("Authorization" to "Bearer $key"),
+                mapOf("x-account-key" to key),
+                mapOf("x-octave-key" to key),
+            )
+        }
         for (headers in headerSets) {
             try {
                 val resp = get(url, headers)

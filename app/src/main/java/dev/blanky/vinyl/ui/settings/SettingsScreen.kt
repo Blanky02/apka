@@ -273,7 +273,7 @@ fun SettingsScreen(app: VinylApplication, modifier: Modifier = Modifier) {
             item {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
-                        text = "Octave nie ma hasła — konto to klucz (frasa odzyskiwania). Wygenerujesz go w serwisie: octavestreaming.com → Settings → Account & sync → „Create account” / „I have a key”. Zalogowane konto odblokowuje pełne strumienie; bez konta gra 30-sekundowy preview.",
+                        text = "Octave nie ma hasła — konto to klucz (frasa odzyskiwania) z octavestreaming.com → Settings. Uwaga: endpoint logowania jest obecnie niedostępny (404), ale Octave wydaje token odtwarzania także bez konta, więc pełne strumienie zwykle działają bez logowania. Klucz podaj tylko, jeśli chcesz spróbować konta.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
