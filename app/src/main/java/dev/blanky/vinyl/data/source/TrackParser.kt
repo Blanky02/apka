@@ -95,6 +95,35 @@ object TrackParser {
         return PlaybackToken(token, expiresIn, gated, reason)
     }
 
+    // ---- parsowanie odpowiedzi asynchronicznego odtwarzania (HTTP 202) ----
+
+    /**
+     * Odpowiedź HTTP 202 asynchronicznego żądania odtwarzania (hifi-api v2.10):
+     * `{"status":"pending","requestId":"...","queuePosition":N,
+     *   "statusUrl":"/playback/requests/<id>","cancelUrl":"..."}`.
+     */
+    data class PlaybackRequest(
+        val status: String?,
+        val requestId: String?,
+        val queuePosition: Int?,
+        val statusUrl: String?,
+    )
+
+    /**
+     * Parsuje payload odpowiedzi 202. null = „to nie wygląda na żądanie odtwarzania".
+     * Wymagany jest przynajmniej jeden z: `status`, `statusUrl`, `requestId`.
+     */
+    fun parsePlaybackRequest(raw: String): PlaybackRequest? {
+        val root = runCatching { json.parseToJsonElement(raw) }.getOrNull() ?: return null
+        val obj = root as? JsonObject ?: return null
+        val status = obj.text("status")
+        val statusUrl = obj.text("statusUrl") ?: obj.text("status_url")
+        val requestId = obj.text("requestId") ?: obj.text("request_id")
+        val queuePosition = obj.number("queuePosition")?.toInt() ?: obj.number("queue_position")?.toInt()
+        if (status == null && statusUrl == null && requestId == null) return null
+        return PlaybackRequest(status, requestId, queuePosition, statusUrl)
+    }
+
     /** Czy odpowiedź wygląda jak błąd (`{"error": ...}` / `{"success": false}` / `{"detail": "Not Found"}`). */
     fun isErrorResponse(raw: String): Boolean {
         val root = runCatching { json.parseToJsonElement(raw) }.getOrNull() ?: return false

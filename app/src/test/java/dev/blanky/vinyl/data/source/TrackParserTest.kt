@@ -218,6 +218,36 @@ class TrackParserTest {
     }
 
     @Test
+    fun `parsePlaybackRequest reads pending 202 payload`() {
+        val raw = """
+            {"status":"pending","requestId":"9f2a...","queuePosition":2,
+             "statusUrl":"/playback/requests/9f2a...","cancelUrl":"/playback/requests/9f2a..."}
+        """.trimIndent()
+        val parsed = TrackParser.parsePlaybackRequest(raw)
+        assertNotNull(parsed)
+        val p = parsed!!
+        assertEquals("pending", p.status)
+        assertEquals("9f2a...", p.requestId)
+        assertEquals(2, p.queuePosition)
+        assertEquals("/playback/requests/9f2a...", p.statusUrl)
+    }
+
+    @Test
+    fun `parsePlaybackRequest falls back to requestId when statusUrl missing`() {
+        val parsed = TrackParser.parsePlaybackRequest("""{"status":"processing","requestId":"abc"}""")
+        assertNotNull(parsed)
+        assertEquals("abc", parsed!!.requestId)
+        assertNull(parsed.statusUrl)
+    }
+
+    @Test
+    fun `parsePlaybackRequest null for non 202 shapes`() {
+        assertNull(TrackParser.parsePlaybackRequest("not json"))
+        assertNull(TrackParser.parsePlaybackRequest("""{"url":"https://cdn.example.com/a.flac"}"""))
+        assertNull(TrackParser.parsePlaybackRequest("{}"))
+    }
+
+    @Test
     fun `isErrorResponse detects errors`() {
         assertTrue(TrackParser.isErrorResponse("""{"error":"nope"}"""))
         assertTrue(TrackParser.isErrorResponse("""{"detail":"Not Found"}"""))

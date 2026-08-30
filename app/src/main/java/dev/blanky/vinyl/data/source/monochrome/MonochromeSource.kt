@@ -9,6 +9,7 @@ import dev.blanky.vinyl.data.source.SourceStatus
 import dev.blanky.vinyl.data.source.StreamResult
 import dev.blanky.vinyl.data.source.TrackParser
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -100,7 +101,7 @@ class MonochromeSource(
                     val (manifestQuality, manifestFormat) = manifestFormatFor(tier)
                     val manifestUrl = "$base/trackManifests/?id=$tid&quality=$manifestQuality&adaptive=false&formats=$manifestFormat"
                     try {
-                        val resp = get(manifestUrl)
+                        val resp = getPlaybackAware(base, manifestUrl)
                         if (resp.code in 200..299) {
                             val stream = TrackParser.extractManifestUri(resp.body)
                             if (stream != null) {
@@ -122,7 +123,7 @@ class MonochromeSource(
                     // 2) starszy format: /track/ — bezpośredni adres albo redirect na CDN
                     val legacyUrl = "$base/track/?id=$tid&quality=${tier.tier}"
                     try {
-                        val resp = get(legacyUrl)
+                        val resp = getPlaybackAware(base, legacyUrl)
                         if (resp.code in 200..299) {
                             val stream = TrackParser.extractStreamUrl(resp.body)
                                 ?: (if (resp.finalUrl != legacyUrl) resp.finalUrl else null)
@@ -193,6 +194,66 @@ class MonochromeSource(
 
     private data class HttpResponse(val code: Int, val body: String, val finalUrl: String)
 
+    /**
+     * GET z obsługą asynchronicznych żądań odtwarzania. Instancje hifi-api
+     * v2.10, gdy pula kont odtwarzania jest zajęta, odpowiadają HTTP 202
+     * z polem `statusUrl` (np. `/playback/requests/<id>`); klient musi wtedy
+     * odpytywać ten adres, aż żądanie przejdzie w stan `completed` (odpowiedź
+     * 200 z manifestem/strumieniem) albo zostanie odrzucone (4xx/5xx).
+     */
+    private suspend fun getPlaybackAware(base: String, url: String): HttpResponse {
+        val first = get(url)
+        if (first.code != 202) return first
+
+        val pending = TrackParser.parsePlaybackRequest(first.body)
+        val statusPath = pending?.statusUrl
+            ?: pending?.requestId?.let { "/playback/requests/$it" }
+        if (statusPath.isNullOrBlank()) {
+            ApiLog.record(displayName, "stream/202", url, first.code, first.body.take(200), ok = false)
+            return first
+        }
+        val pollUrl = resolveStatusUrl(base, statusPath)
+        ApiLog.record(
+            displayName, "stream/202", url, first.code,
+            "w kolejce (poz. ${pending.queuePosition ?: "?"}) — odpytywanie $pollUrl", ok = true,
+        )
+
+        val deadline = System.currentTimeMillis() + PLAYBACK_POLL_TIMEOUT_MS
+        var polls = 0
+        var last = first
+        while (System.currentTimeMillis() < deadline) {
+            delay(PLAYBACK_POLL_INTERVAL_MS)
+            polls++
+            last = try {
+                get(pollUrl)
+            } catch (e: Exception) {
+                ApiLog.record(displayName, "stream/poll", pollUrl, -1, e.message ?: "błąd sieci", ok = false)
+                return first
+            }
+            if (last.code != 202) return last.withFinalUrl(url)
+            val still = TrackParser.parsePlaybackRequest(last.body)
+            ApiLog.record(
+                displayName, "stream/poll", pollUrl, last.code,
+                "nadal w kolejce (poz. ${still?.queuePosition ?: "?"}, próba $polls)", ok = false,
+            )
+        }
+        return last.withFinalUrl(url)
+    }
+
+    /**
+     * Wynik odpytywania 202 to JSON z manifestem/strumieniem, a nie redirect —
+     * dlatego `finalUrl` wraca do pierwotnego adresu żądania, żeby fallback
+     * w gałęzi `/track/` (redirect na CDN) nie pomylił adresu `statusUrl` ze
+     * strumieniem.
+     */
+    private fun HttpResponse.withFinalUrl(url: String): HttpResponse = HttpResponse(code, body, url)
+
+    /** Skleja względny `statusUrl` (np. `/playback/requests/x`) z bazą instancji. */
+    private fun resolveStatusUrl(base: String, statusUrl: String): String = when {
+        statusUrl.startsWith("http://") || statusUrl.startsWith("https://") -> statusUrl
+        else -> base.trimEnd('/') + "/" + statusUrl.trimStart('/')
+    }
+
     private fun get(url: String): HttpResponse {
         val request = Request.Builder()
             .url(url)
@@ -225,5 +286,11 @@ class MonochromeSource(
             "https://lol.samidy.workers.dev",
             "https://monochrome-api.samidy.com",
         )
+
+        /** Jak długo maksymalnie odpytywać 202 (żądanie odtwarzania w kolejce). */
+        private const val PLAYBACK_POLL_TIMEOUT_MS = 30_000L
+
+        /** Odstęp między odpytywaniami statusu żądania odtwarzania. */
+        private const val PLAYBACK_POLL_INTERVAL_MS = 800L
     }
 }
