@@ -47,7 +47,7 @@ class MonochromeSource(
             val base = instances[(instanceIndex + i) % n]
             val url = "$base/search/?s=${Uri.encode(query)}&limit=$limit"
             try {
-                val resp = get(url)
+                val resp = getWithRetry(url)
                 if (resp.code in 200..299) {
                     val parsed = TrackParser.parseTracks(resp.body, id, ID_PREFIX)
                     if (parsed != null) {
@@ -202,7 +202,7 @@ class MonochromeSource(
      * 200 z manifestem/strumieniem) albo zostanie odrzucone (4xx/5xx).
      */
     private suspend fun getPlaybackAware(base: String, url: String): HttpResponse {
-        val first = get(url)
+        val first = getWithRetry(url)
         if (first.code != 202) return first
 
         val pending = TrackParser.parsePlaybackRequest(first.body)
@@ -225,7 +225,7 @@ class MonochromeSource(
             delay(PLAYBACK_POLL_INTERVAL_MS)
             polls++
             last = try {
-                get(pollUrl)
+                getWithRetry(pollUrl)
             } catch (e: Exception) {
                 ApiLog.record(displayName, "stream/poll", pollUrl, -1, e.message ?: "błąd sieci", ok = false)
                 return first
@@ -252,6 +252,32 @@ class MonochromeSource(
     private fun resolveStatusUrl(base: String, statusUrl: String): String = when {
         statusUrl.startsWith("http://") || statusUrl.startsWith("https://") -> statusUrl
         else -> base.trimEnd('/') + "/" + statusUrl.trimStart('/')
+    }
+
+    /**
+     * GET z krótkim retry przy 5xx. Load-balancer `lol.samidy.workers.dev`
+     * rozdziela ruch między zdrowe instancje (pain-1/pain-2) a martwą
+     * (`whole-lotta-accs` → Cloudflare 521), więc pojedyncze żądanie potrafi
+     * trafić na martwy backend. Powtórzenie tego samego URL po chwili zwykle
+     * trafia na zdrową instancję (zweryfikowane: ten sam URL daje na zmianę
+     * 521 i 200). Retry nie dotyczy 4xx — te niosą informację (brak utworu,
+     * błąd upstream), a nie awarię sieci.
+     */
+    private suspend fun getWithRetry(url: String): HttpResponse {
+        var resp = get(url)
+        var attempt = 1
+        while (isRetryableStatus(resp.code) && attempt < RETRY_MAX_ATTEMPTS) {
+            attempt++
+            ApiLog.record(displayName, "retry", url, resp.code, "5xx — próba $attempt/$RETRY_MAX_ATTEMPTS", ok = false)
+            delay(RETRY_DELAY_MS)
+            resp = try {
+                get(url)
+            } catch (e: Exception) {
+                ApiLog.record(displayName, "retry", url, -1, e.message ?: "błąd sieci", ok = false)
+                break
+            }
+        }
+        return resp
     }
 
     private fun get(url: String): HttpResponse {
@@ -292,5 +318,14 @@ class MonochromeSource(
 
         /** Odstęp między odpytywaniami statusu żądania odtwarzania. */
         private const val PLAYBACK_POLL_INTERVAL_MS = 800L
+
+        /** Ile razy łącznie wykonać żądanie (pierwsza próba + retry) przy 5xx. */
+        private const val RETRY_MAX_ATTEMPTS = 3
+
+        /** Odstęp między próbami przy 5xx (trafienie na martwy backend LB). */
+        private const val RETRY_DELAY_MS = 1_000L
+
+        /** Czy kod HTTP oznacza przejściową awarię serwera (warto powtórzyć). */
+        private fun isRetryableStatus(code: Int): Boolean = code >= 500
     }
 }
